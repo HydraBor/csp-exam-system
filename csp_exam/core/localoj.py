@@ -124,6 +124,8 @@ def health() -> dict:
     if g.get("ok"):
         try:
             environment = judgelocal.gojudge.ensure_ready()
+            from . import hydro_client
+            hydro_client.health()
         except judgelocal.gojudge.GoJudgeError as e:
             g.update(ok=False, error=str(e))
     pids = sorted(problem_pids())

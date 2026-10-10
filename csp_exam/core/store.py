@@ -119,6 +119,9 @@ def duration_of(contest: dict) -> int:
 
 def _path(*parts: str) -> str:
     p = os.path.join(DATA_DIR, *parts)
+    root, target = os.path.realpath(DATA_DIR), os.path.realpath(p)
+    if os.path.commonpath([root, target]) != root:
+        raise ValueError("数据路径越过了本服务的数据目录。")
     os.makedirs(os.path.dirname(p), exist_ok=True)
     return p
 
@@ -156,13 +159,20 @@ def load_students() -> dict:
     return _load(_students_path(), dict)
 
 
+def normalize_prefix(prefix: str) -> str:
+    prefix = str(prefix or DEFAULT_PREFIX).strip().upper()
+    if not re.fullmatch(r"[A-Z]{1,16}", prefix):
+        raise ValueError("考号前缀必须是 1 至 16 个英文字母。")
+    return prefix
+
+
 def make_kaohao(num: int, prefix: str = DEFAULT_PREFIX, level: str = DEFAULT_LEVEL,
                 width: int = DEFAULT_WIDTH) -> str:
     """拼一个考号：<前缀>-<级别><随机数>，如 GD-S48213、GD-J07915。"""
     lv = (level or DEFAULT_LEVEL).upper()
     if lv not in LEVEL_MINUTES:
         lv = DEFAULT_LEVEL
-    return f"{prefix}-{lv}{num:0{width}d}"
+    return f"{normalize_prefix(prefix)}-{lv}{num:0{width}d}"
 
 
 def split_kaohao(kaohao: str) -> tuple[str, str, str]:
@@ -275,7 +285,14 @@ def _index_path() -> str:
 
 
 def _cp(cid: str, name: str) -> str:
+    _safe_component(cid)
     return _path("contests", cid, name)
+
+
+def _safe_component(value: str) -> None:
+    if (not isinstance(value, str) or not value or value in (".", "..")
+            or any(c in value for c in "\\/:\0") or any(ord(c) < 32 for c in value)):
+        raise ValueError("比赛或考号标识无效。")
 
 
 def _migrate_if_needed() -> None:
@@ -338,7 +355,8 @@ def default_contest_id() -> str:
 
 
 def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_PREFIX,
-                   level: str = DEFAULT_LEVEL, duration_min: int | None = None) -> dict:
+                   level: str = DEFAULT_LEVEL, duration_min: int | None = None,
+                   start_at=None, end_at=None) -> dict:
     """新建一场比赛。
 
     level         —— 级别 `J` 入门级 / `S` 提高级，决定考号字母与默认时长
@@ -346,6 +364,7 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
 
     没有「反馈模式」参数：所有比赛一律赛中零反馈，老师点「公布成绩」后才对学生可见。
     """
+    prefix = normalize_prefix(prefix)
     with _LOCK:
         items = list_contests()
         n = 1
@@ -363,6 +382,9 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
             "duration_min": int(duration_min or LEVEL_MINUTES[lv]),
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        if start_at is not None or end_at is not None:
+            from .contest_time import parse_schedule
+            contest.update(parse_schedule({"start_at": start_at, "end_at": end_at}))
         items.append(contest)
         save_contests(items)
         _save(_cp(contest["id"], "exam.json"), {"title": contest["title"], "notice": "",
@@ -377,6 +399,10 @@ def update_contest(cid: str, **fields) -> dict | None:
         items = list_contests()
         for c in items:
             if c.get("id") == cid:
+                if any(k in fields and fields[k] != c.get(k) for k in ("start_at", "end_at")):
+                    exam = dict(load_exam(cid), released=False)
+                    _save(_cp(cid, "exam.json"), exam)
+                    fields["released"] = False
                 if "rule" in fields and fields["rule"] != c.get("rule") and load_results(cid):
                     exam = dict(load_exam(cid), released=False)
                     _save(_cp(cid, "exam.json"), exam)
@@ -396,6 +422,13 @@ def delete_contest(cid: str) -> bool:
         keep = [c for c in items if c.get("id") != cid]
         if len(keep) == len(items):
             return False
+        from .contest_time import phase
+        contest = next(c for c in items if c.get("id") == cid)
+        if phase(contest) == "running":
+            raise ValueError("比赛正在进行，不能删除。")
+        if any(r.get("judging") or r.get("submission_state") in ("queued", "judging")
+               for r in load_results(cid).values()):
+            raise ValueError("本场仍有排队或正在评测的提交，不能删除。")
         save_contests(keep)
         shutil.rmtree(os.path.join(DATA_DIR, "contests", cid), ignore_errors=True)
         return True
@@ -411,10 +444,16 @@ def load_exam(cid: str) -> dict:
     return out
 
 
+def grading_problems(exam: dict) -> list:
+    """比较实际评分与文件契约，忽略题名等显示文字；历史提交快照保留原文字。"""
+    return [(p.get("no"), p.get("pid"), code_of(p), p.get("full", 100))
+            for p in (exam or {}).get("problems", [])]
+
+
 def save_exam(cid: str, exam: dict) -> None:
     with _LOCK:
         old = load_exam(cid)
-        if old.get("problems", []) != exam.get("problems", []) and load_results(cid):
+        if grading_problems(old) != grading_problems(exam) and load_results(cid):
             exam = dict(exam, released=False)
             update_contest(cid, released=False)
         _save(_cp(cid, "exam.json"), exam)
@@ -658,6 +697,8 @@ def put_result(cid: str, kaohao: str, payload: dict) -> None:
 
 
 def upload_dir(cid: str, kaohao: str) -> str:
+    _safe_component(cid)
+    _safe_component(kaohao)
     d = _path("contests", cid, "uploads", kaohao)
     return d
 
@@ -722,16 +763,19 @@ def ranking(cid: str, include_all: bool = False, *, _results: dict | None = None
 
 def set_released(cid: str, released: bool) -> None:
     """校验与公布在同一把锁中完成，避免与上传或重测竞态。"""
+    from .contest_time import phase, window
     with _LOCK:
         contest = get_contest(cid)
         if not contest:
             raise ValueError("比赛不存在")
+        if released and window(contest)[0] and phase(contest) != "ended":
+            raise ValueError("比赛结束后才能公布成绩。")
         exam = load_exam(cid)
         results = load_results(cid).values()
         if released and any(result_pending(r) for r in results):
             raise ValueError("仍有提交未评测完成或需要重测，暂不能公布成绩。")
         if released and any((r.get("submission_exam") is not None and
-                r["submission_exam"].get("problems", []) != exam.get("problems", [])) or
+                grading_problems(r["submission_exam"]) != grading_problems(exam)) or
                 (r.get("judge_rule") and r["judge_rule"].get("key") != rule_of(contest)["key"])
                 for r in results):
             raise ValueError("成绩对应的题目或赛制已改变，请重测后再公布。")

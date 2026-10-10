@@ -5,6 +5,7 @@ from copy import deepcopy
 import os
 
 from . import store
+from .contest_time import phase
 
 
 _CACHE = OrderedDict()
@@ -32,14 +33,14 @@ def snapshot(cid: str, *, private: bool = False) -> dict:
         if not contest:
             return {"ok": False, "error": "比赛不存在"}
         key = (os.path.abspath(store.DATA_DIR), cid, private)
-        signature = _signature(cid)
+        signature = (_signature(cid), phase(contest))
         cached = _CACHE.get(key)
         if cached and cached[0] == signature:
             _CACHE.move_to_end(key)
             return deepcopy(cached[1])
         state = _snapshot(cid, contest, private=private)
         # 文件版本改变即失效；不使用可能延迟撤回成绩的时间缓存。
-        if _signature(cid) == signature:
+        if (_signature(cid), phase(contest)) == signature:
             _CACHE[key] = (signature, state)
             _CACHE.move_to_end(key)
             while len(_CACHE) > _CACHE_LIMIT:
@@ -49,7 +50,7 @@ def snapshot(cid: str, *, private: bool = False) -> dict:
 
 def _snapshot(cid: str, contest: dict, *, private: bool) -> dict:
     exam = store.load_exam(cid)
-    if not private and not exam.get("released"):
+    if not private and (phase(contest) != "ended" or not exam.get("released")):
         return {"ok": True, "released": False, "title": contest["title"]}
     problems = exam.get("problems") or []
     all_results = store.load_results(cid)

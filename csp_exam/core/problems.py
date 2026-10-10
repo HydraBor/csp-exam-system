@@ -376,7 +376,6 @@ def collect_samples(children: dict[str, str], pid: str) -> tuple[list[dict], lis
     notes: list[str] = []
     big_rels: dict[str, str] = {}
     small_rels: dict[str, str] = {}
-    prefix_low = tuple(s.lower() for s in SAMPLE_STEMS)
     for rel, full in children.items():
         parts = rel.split("/")
         base = os.path.basename(rel)
@@ -387,7 +386,7 @@ def collect_samples(children: dict[str, str], pid: str) -> tuple[list[dict], lis
         # ② 题目样例：文件名以 样例/sample/ex/example 开头（放在根目录或 data/ 下都认）
         if base.lower().endswith((".in", ".out", ".ans")):
             stem = base.rsplit(".", 1)[0].lower()
-            if stem.startswith(prefix_low):
+            if ip.is_sample_stem(stem):
                 small_rels[rel] = full
     # 大样例目录里的非数据文件（比如说明）也算
     big = _pair_up(big_rels) if big_rels else []
@@ -413,10 +412,8 @@ def detect_bundle(files: dict[str, bytes]) -> dict:
     found = ip.find_problem_dirs(bundle)
     problems = []
     for prefix, pid, title in found:
-        if prefix in ("", "."):
-            continue
         prob = ip.parse_problem(bundle, prefix, pid, title, {})
-        children = {n[len(prefix) + 1:]: n for n in bundle.names() if n.startswith(prefix + "/")}
+        children = ip.problem_children(bundle, prefix)
         big, small, notes = collect_samples(children, pid)
         prob["big_samples"] = big
         prob["samples"] = small
@@ -536,39 +533,27 @@ def sample_path(pid: str, name: str, base_dir: str = "") -> str | None:
 
 
 def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], list[str]]:
-    """把上传的东西摊平成 {相对路径: 内容}。zip 会被解开。
-
-    返回 (摊平后的文件, 提示信息)。
-    """
-    out: dict[str, bytes] = {}
-    notes: list[str] = []
-    # 上传里**已经有目录结构**（选了整个出题文件夹）时，里面的 zip 一律**不当数据**：
-    # 出题文件夹里常带着 `XX-洛谷上传.zip`（或别的备份包），那是给别的平台用的，
-    # 展开它会把同一个题目认成两道（踩过：老师从本机工具传题，识别到 2 道、还都写盘失败）。
-    # 单独传一个 zip（手选打包好的题）时没有目录结构，照旧展开。
+    from .archive import read_zip, safe_name
+    from ..config import MAX_PS_UPLOAD
+    out, notes = {}, []
     has_dirs = any("/" in k.replace("\\", "/").strip("/") for k in files)
     for name, data in files.items():
-        clean = name.replace("\\", "/").lstrip("/")
+        clean = safe_name(name)
         if clean.lower().endswith(".zip"):
             if has_dirs:
-                notes.append(f"{clean} 是压缩包，里面已经有整个文件夹了，跳过它")
+                notes.append(f"{clean} 是文件夹内的备份压缩包，未展开")
                 continue
-            try:
-                with zipfile.ZipFile(io.BytesIO(data)) as z:
-                    for info in z.infolist():
-                        if info.is_dir():
-                            continue
-                        inner = info.filename.replace("\\", "/").lstrip("/")
-                        if "__MACOSX" in inner or inner.startswith("."):
-                            continue
-                        out[inner] = z.read(info)
-                notes.append(f"{clean} 是 zip，已展开")
-            except zipfile.BadZipFile:
-                notes.append(f"{clean} 不是有效的 zip，已忽略")
-            continue
-        if clean.startswith(".") or "__MACOSX" in clean:
-            continue
-        out[clean] = data
+            added = read_zip(data)
+            notes.append(f"{clean} 是 zip，已展开")
+        else:
+            if "__MACOSX" in clean.split("/") or clean.rsplit("/", 1)[-1] == ".DS_Store":
+                continue
+            added = {clean: data}
+        if out.keys() & added.keys():
+            raise ValueError("上传的多个文件或压缩包包含重复路径。")
+        out.update(added)
+        if len(out) > 20000 or sum(map(len, out.values())) > MAX_PS_UPLOAD:
+            raise ValueError(f"单题文件超过 {MAX_PS_UPLOAD / 1048576:g} MiB 或 20000 个文件。")
     return out, notes
 
 
@@ -592,13 +577,19 @@ def pair_cases(files: dict[str, bytes]) -> tuple[list[dict], list[str]]:
         for base, path in names.items():
             low = base.lower()
             if low.endswith(".in"):
-                ins[base[: -len(".in")]] = path
+                stem = base[: -len(".in")]
+                if stem in ins:
+                    problems.append(f"{path}（重复输入，与 {ins[stem]} 冲突）")
+                ins[stem] = path
         outs = {}
         for base, path in names.items():
             low = base.lower()
             for ext in (".out", ".ans"):
                 if low.endswith(ext):
-                    outs[base[: -len(ext)]] = path
+                    stem = base[: -len(ext)]
+                    if stem in outs:
+                        problems.append(f"{path}（重复答案，与 {outs[stem]} 冲突）")
+                    outs[stem] = path
                     break
         for stem in sorted(ins, key=_natural_key):
             out_rel = outs.pop(stem, None)
@@ -712,12 +703,20 @@ def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
     name = (name or code or "").strip()
     files, notes = unpack(uploads)
     problems: list[str] = []
+    if type(time_ms) is not int or type(memory_mb) is not int or time_ms <= 0 or memory_mb <= 0:
+        return {"ok": False, "error": "时限和内存必须是正整数。", "notes": notes}
 
     # 先看是不是出题工程结构：是的话，题目标识/标题/题面/标程/数据/大样例都听它的
     det = detect_bundle(files)
     prob = det["problems"][0] if det["count"] == 1 else None
     sample_info = {}
     if prob:
+        if prob.get("errors"):
+            return {"ok": False, "pid": pid or prob["pid"], "error": "；".join(prob["errors"]), "notes": notes}
+        config = prob.get("config") or {}
+        time_ms = config.get("time_ms", time_ms)
+        memory_mb = config.get("memory_mb", memory_mb)
+        name = name or config.get("name", "")
         cases = [{"name": str(i), "in": c[1], "out": c[2]}
                  for i, c in enumerate(prob["cases"], 1)]
         if not pid:
@@ -736,6 +735,8 @@ def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
                                       "用文件夹上传时会自动取「分类号-题名」里的分类号",
                 "notes": notes}
     title = title or pid
+    if any("有答案" in item or "重复" in item for item in problems):
+        return {"ok": False, "error": "；".join(problems), "notes": notes}
     if not cases:
         return {"ok": False,
                 "error": "没有配出任何测试点：请上传成对的 .in/.out（或 .in/.ans）文件，"
@@ -863,7 +864,7 @@ def create_bundle(uploads: dict[str, bytes], *, time_ms: int = DEFAULT_TIME_MS,
             continue
         if on_site is None and not overwrite:
             on_site = localoj.problem_pids()
-        one_files = {k: v for k, v in files.items() if k.startswith(prob["prefix"] + "/")}
+        one_files = {k: files[k] for k in ip.problem_children(MemoryBundle(files), prob["prefix"]).values()}
         got = create_problem(prob["pid"], prob["title"], one_files,
                              time_ms=time_ms, memory_mb=memory_mb,
                              statement=statement, overwrite=overwrite, tags=tags,
