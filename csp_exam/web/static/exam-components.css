@@ -39,13 +39,15 @@ textarea.code{min-height:420px;font-size:14.5px;line-height:1.6;white-space:pre;
 .tree-link{line-height:1.8}
 .stmt h2,.stmt h3{margin:18px 0 8px;padding:0;border:0}
 .stmt h4,.stmt h5,.stmt h6{margin:14px 0 6px}
-.stmt p{margin:8px 0}
+.stmt p{margin:1em 0}
 .stmt pre,.stmt-code{background:#f8fafc;color:#334155;border:1px solid #e2e8f0;
      border-radius:8px;padding:10px 12px;font-size:13.5px;overflow:auto}
 .stmt code{background:#f1f5f9;border-radius:4px;padding:1px 5px;
      font-family:ui-monospace,Consolas,monospace}
 .stmt pre code{background:none;padding:0}
-.stmt ul,.stmt ol{margin:8px 0 8px 22px}
+.stmt ul,.stmt ol{margin:1em 0;padding-inline-start:2.25em;list-style-position:outside}
+.stmt li+li{margin-top:.5em}
+.stmt li>p{margin:.5em 0}
 .stmt blockquote{margin:8px 0;padding:6px 12px;border-left:3px solid #cbd5e1;color:#475569}
 .stmt table{margin:10px 0}
 .stmt hr{border:0;border-top:1px solid #e2e8f0;margin:16px 0}
