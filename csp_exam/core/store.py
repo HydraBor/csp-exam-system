@@ -494,6 +494,39 @@ def sync_problem_title(pid: str, title: str, previous: str = "") -> None:
                 save_exam(cid, exam)
 
 
+def sync_problem_name(pid: str, name: str, previous: str, *, dry_run=False) -> list[str]:
+    """Update inherited file contracts, keeping overrides and completed exams.
+
+    Submitted/queued snapshots retain their original contract. A later upload
+    captures the new exam, including the filename sent to HydroJudge.
+    Validate every affected exam before writing any of them.
+    """
+    from . import contest_time
+    if not name or not previous or name == previous:
+        return []
+    with _LOCK:
+        updates = []
+        for contest in list_contests():
+            if contest_time.phase(contest) == "ended":
+                continue
+            cid = contest["id"]
+            exam = load_exam(cid)
+            inherited = [p for p in exam.get("problems", [])
+                         if p.get("pid") == pid and code_of(p) == previous]
+            if not inherited:
+                continue
+            if any(p.get("pid") != pid and code_of(p) == name
+                   for p in exam.get("problems", [])):
+                raise ValueError(f"比赛 {contest.get('title') or cid} 已有英文名 {name}，修改没有保存；请先处理本场重名。")
+            for problem in inherited:
+                problem["name"] = name
+            updates.append((cid, exam))
+        if not dry_run:
+            for cid, exam in updates:
+                save_exam(cid, exam)
+        return [cid for cid, _ in updates]
+
+
 def _migrate_roster(cid: str, data) -> dict[str, dict]:
     """老版 roster.json 是一个考号列表（姓名在全局学生池里），这里归一化。
 

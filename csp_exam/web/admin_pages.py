@@ -88,7 +88,7 @@ def _problem_info_path() -> str:
 remember_problem = make_problem.remember_problem
 
 
-@make_problem._problem_write
+@make_problem._metadata_write
 def remember_meta(pid: str, *, title: str = "", name: str = "", time_ms=None,
                   memory_mb=None) -> dict:
     """改一道题的元信息（题目详情页的「保存修改」用）：题目名 / 英文名 / 时限 / 内存。
@@ -138,6 +138,11 @@ def remember_meta(pid: str, *, title: str = "", name: str = "", time_ms=None,
     rec = dict(codes.get(pid) or {})
     old_title = str(info0.get("title") or rec.get("title") or "")
     old_name = str(rec.get("name") or info0.get("name") or "")
+    try:
+        synced = store.sync_problem_name(pid, name, old_name, dry_run=True)
+    except ValueError as error:
+        out["error"] = str(error)
+        return out
     if not title:
         if old_title:
             skipped.append("题目名（留空没改 —— 清掉就认不出是哪道题了）")
@@ -169,6 +174,12 @@ def remember_meta(pid: str, *, title: str = "", name: str = "", time_ms=None,
     # 限额的在评测检查成功后，才保存标题和英文名，避免拒绝时留下半次修改。
     if rec != (codes.get(pid) or {}) or any(x in changed for x in ("题目名", "英文名")):
         make_problem.save_codes(codes)
+    # Keep the library/export view in agreement with the registry, including
+    # clearing a default name; empty values must not revive stale fallback data.
+    info = load_problem_info()
+    info[pid]["name"] = name
+    save_problem_info(info)
+    store.sync_problem_name(pid, name, old_name)
     # 题库清单是**缓存**（列表页先读它）：不刷新的话，改了题目名要等下一次刷新才看得见
     try:
         store.save_catalog(localoj.list_problems())
@@ -177,6 +188,7 @@ def remember_meta(pid: str, *, title: str = "", name: str = "", time_ms=None,
     out["ok"] = True
     out["changed"] = changed
     out["skipped"] = skipped
+    out["synced_contests"] = synced
     return out
 
 
@@ -2688,7 +2700,9 @@ window.addEventListener('hashchange',openLinkedSource);
           <input type="number" name="memory_mb" min="16" step="16" value="{memory_mb or ''}"></div>
       </div>
       <p class="muted" style="font-size:13px;margin:8px 0 2px">
-        时限 / 内存<b>真的会改变判题</b>（下一次提交就按新值跑）；英文名只在「这场比赛没单独设过」时生效。</p>
+        英文名修改会同步到尚未结束、仍沿用原名的比赛；单独设过的名字和已结束比赛保留。
+        下一次交卷按新目录及新 <code>.in/.out</code> 文件名评测，请同步检查题面和标程。
+        清空英文名只清除题库默认值。</p>
       <label>题面（Markdown —— 左边写完，右边立刻就是学生看到的样子）</label>
       <textarea class="codebox" id="pd-src" name="statement" spellcheck="false">{esc(text)}</textarea>
       <p class="row" style="margin:10px 0 0">
@@ -2888,6 +2902,8 @@ window.addEventListener('hashchange',openLinkedSource);
         parts = [f"保存好了（{title or pid}）：题面已更新"]
         if changed:
             parts.append("，" + "、".join(changed) + "也改了")
+        if m.get("synced_contests"):
+            parts.append("；英文名已同步到比赛 " + "、".join(m["synced_contests"]))
         parts.append("。")
         parts.append("；".join(skipped) + "。" if skipped else "学生端立刻是新的。")
         self._redirect(problem_detail_url(key, pid, msg="".join(parts)))

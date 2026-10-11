@@ -198,8 +198,8 @@ def number_of_pid(pid: str, items: dict | None = None) -> str:
 def name_of_pid(pid: str, items: dict | None = None) -> str:
     """这道题**建题时填的默认英文名**（可留空）；没填过返回 ""。
 
-    它只是加进比赛时输入框的默认值 —— 学生真正看到的英文名在**本场** `exam.json`
-    的 `name` 字段里（老师配题时可以按本场情况改）。
+    加进比赛时用作默认值；后续修改会同步尚未结束且仍沿用旧默认值的场次。
+    学生真正使用的是本场 `name`（老师可以单独改）；已结束场次保留历史契约。
     """
     rec = (load_codes() if items is None else items).get(str(pid or "").strip()) or {}
     return str(rec.get("name") or "").strip()
@@ -665,6 +665,17 @@ def _problem_write(fn):
     return locked
 
 
+def _metadata_write(fn):
+    """Commit registry, library metadata and inherited exam names together."""
+    from functools import wraps
+    @wraps(fn)
+    def locked(*args, **kwargs):
+        from . import database, store
+        with store._LOCK, database.transaction(store.DATA_DIR):
+            return fn(*args, **kwargs)
+    return locked
+
+
 @_problem_write
 def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
                    time_ms: int = DEFAULT_TIME_MS, memory_mb: int = DEFAULT_MEMORY_MB,
@@ -777,8 +788,10 @@ def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
         return {"ok": False, "error": "测试点缺少标准答案，题目没有改动。", "pid": pid}
     # ---- 题目编号：建题时由系统分配（T00001，跟着题走）；英文名记成默认值
     try:
+        previous_name = str((load_problem_info().get(pid) or {}).get("name") or name_of_pid(pid))
+        store.sync_problem_name(pid, name, previous_name, dry_run=True)
         number = assign_number(pid, title=title, name=name)
-    except CodeError as e:
+    except (CodeError, ValueError) as e:
         return {"ok": False, "error": str(e), "pid": pid, "number": "", "name": "",
                 "code": "", "notes": notes, "cases": len(cases)}
 
@@ -884,6 +897,7 @@ if __name__ == "__main__":      # 手工调试用
     raise SystemExit(0 if len(sys.argv) == 1 else 2)
 
 
+@_metadata_write
 def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "", cases=None,
                      time_ms=None, memory_mb=None, std: str = "") -> None:
     """建题成功后记下这道题的元信息（空值不覆盖已有的）。
@@ -897,6 +911,7 @@ def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "
     with store._LOCK:
         items = load_problem_info()
         previous_title = str((items.get(pid) or {}).get('title') or '')
+        previous_name = str((items.get(pid) or {}).get('name') or '')
         rec = dict(items.get(pid) or {})
         if title:
             rec["title"] = str(title)
@@ -920,6 +935,8 @@ def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "
                 for r in store.load_results(c["id"]).values()):
             raise OSError("这道题正在评测，请等评测完成再修改限额。")
         items[pid] = rec
+        if name and name != previous_name:
+            store.sync_problem_name(pid, str(name), previous_name)
         save_problem_info(items)
         if title and title != previous_title:
             store.sync_problem_title(pid, str(title), previous_title)
