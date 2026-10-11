@@ -13,17 +13,11 @@ _CACHE_LIMIT = 32
 
 
 def _signature(cid: str) -> tuple:
-    paths = [os.path.join(store.DATA_DIR, "contests.json")]
-    paths.extend(os.path.join(store.DATA_DIR, "contests", cid, name)
-                 for name in ("exam.json", "roster.json", "results.json"))
-    values = []
-    for path in paths:
-        try:
-            st = os.stat(path)
-            values.append((st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size))
-        except FileNotFoundError:
-            values.append(None)
-    return tuple(values)
+    from . import database
+    keys = ["contests.json"] + [f"contests/{cid}/{name}" for name in ("exam.json", "roster.json", "results.json")]
+    versions = database.signature(store.DATA_DIR, keys)
+    st = os.stat(os.path.join(store.DATA_DIR, database.FILENAME))
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, versions)
 
 
 def snapshot(cid: str, *, private: bool = False) -> dict:

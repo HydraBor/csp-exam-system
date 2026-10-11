@@ -495,8 +495,8 @@ def save_samples(pid: str, groups: list[dict], files: dict[str, bytes],
                 n_bytes += len(files[full])
                 entry["files"].append({"name": name, "size": len(files[full]), "role": "other"})
             items.append(entry)
-    with open(os.path.join(root, "manifest.json"), "w", encoding="utf-8") as f:
-        json.dump({"pid": pid, "items": items}, f, ensure_ascii=False, indent=2)
+    from . import store
+    store._save(os.path.join(root, "manifest.json"), {"pid": pid, "items": items})
     return {"items": items, "files": n_files, "bytes": n_bytes, "dir": root}
 
 
@@ -504,13 +504,8 @@ def load_samples(pid: str, base_dir: str = "") -> dict:
     """读某个题目已存的大样例/样例清单（学生下载页用）。"""
     root = _samples_root(pid, base_dir)
     path = os.path.join(root, "manifest.json")
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    from . import store
+    data = store._load(path, dict)
     # 只保留文件还在的条目
     items = []
     for it in data.get("items") or []:
@@ -649,13 +644,10 @@ def drop_problem_cache(pid: str) -> list[str]:
     if not judge_local.valid_pid(pid):
         raise ValueError("题目标识无效")
     gone = []
-    stmt = os.path.join(store.DATA_DIR, "statements", f"{pid}.md")
-    if os.path.isfile(stmt):
-        try:
-            os.remove(stmt)
-            gone.append("题面缓存")
-        except OSError:
-            pass
+    from . import database
+    if database.delete_statement(store.DATA_DIR, pid):
+        gone.append("题面缓存")
+    database.delete(store.DATA_DIR, "samples/" + pid)
     samples = os.path.join(store.DATA_DIR, "samples", pid)
     if os.path.isdir(samples):
         shutil.rmtree(samples, ignore_errors=True)
@@ -904,6 +896,7 @@ def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "
     from . import store
     with store._LOCK:
         items = load_problem_info()
+        previous_title = str((items.get(pid) or {}).get('title') or '')
         rec = dict(items.get(pid) or {})
         if title:
             rec["title"] = str(title)
@@ -928,5 +921,7 @@ def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "
             raise OSError("这道题正在评测，请等评测完成再修改限额。")
         items[pid] = rec
         save_problem_info(items)
+        if title and title != previous_title:
+            store.sync_problem_title(pid, str(title), previous_title)
         if limits_changed:
             store.invalidate_problem_results(pid, "题目评测限额已更新，请重测")

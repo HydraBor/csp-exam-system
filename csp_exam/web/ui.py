@@ -172,25 +172,26 @@ def page(title: str, body: str, nav: str = "", refresh: int = 0,
     math_script = ""
     if math:
         math_head = ('<link rel="stylesheet" href="/static/katex/katex.min.css">')
-        math_script = """
+        math_script = r"""
 <script defer src="/static/katex/katex.min.js"></script>
 <script defer src="/static/katex/auto-render.min.js"></script>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
   if (!window.renderMathInElement) return;      /* 没加载成功就保持原样（显示 $...$） */
-  var box = document.querySelector(".stmt") || document.body;
-  try {
-    renderMathInElement(box, {
+  var boxes = document.querySelectorAll(".stmt");
+  if (!boxes.length) boxes = [document.body];
+  boxes.forEach(function (box) {
+    try {
+      renderMathInElement(box, {
       delimiters: [
         { left: "$$", right: "$$", display: true },
-        { left: "\\[", right: "\\]", display: true },
-        { left: "$", right: "$", display: false },
-        { left: "\\(", right: "\\)", display: false }
+        { left: "$", right: "$", display: false }
       ],
       throwOnError: false,
       ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option"]
-    });
-  } catch (e) { /* 渲染失败不影响阅读 */ }
+      });
+    } catch (e) { /* 渲染失败不影响阅读 */ }
+  });
 });
 </script>"""
     shared = contest_script() if contest_js else ""

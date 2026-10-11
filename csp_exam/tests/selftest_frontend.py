@@ -54,6 +54,40 @@ class Frontend(unittest.TestCase):
                        '<input value=\'class="原样"\' class="csp-name" name="title">'):
             self.assertIn('value=\'class="原样"\'', components(source))
 
+    def test_student_and_admin_use_only_dollar_math_delimiters(self):
+        import re
+        import shutil
+        from csp_exam.web.admin_pages import _math_js
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node.js is required for the formula script regression')
+        rendered = page('公式', '<div class="stmt"></div>', math=True, contest_js=False).decode()
+        scripts = re.findall(r'<script>(.*?)</script>', rendered, re.S)
+        javascript = '''const vm = require('node:vm');
+let callback, calls=[];
+const boxes=[{id:1},{id:2}];
+const context={window:{renderMathInElement:true},
+  document:{addEventListener:(event,fn)=>{callback=fn}, querySelectorAll:()=>boxes},
+  renderMathInElement:(box,options)=>calls.push({box:box.id,options})};
+vm.runInNewContext(INPUT.student,context); callback();
+context.window.renderMathInElement=context.renderMathInElement;
+vm.runInNewContext(INPUT.admin,context); context.cspRenderMath({id:3});
+console.log(JSON.stringify(calls));'''.replace('INPUT', json.dumps({
+            'student': '\n'.join(scripts),
+            'admin': _math_js().removeprefix('<script>').removesuffix('</script>')}))
+        result = subprocess.run([node,'-e',javascript], capture_output=True, text=True, check=True)
+        calls = json.loads(result.stdout)
+        self.assertEqual([c['box'] for c in calls], [1,2,3])
+        expected = ['$$', '$']
+        for call in calls:
+            self.assertEqual([d['left'] for d in call['options']['delimiters']], expected)
+            self.assertIn('code',call['options']['ignoredTags'])
+        from csp_exam.tools.export_group import _HTML, SITE_CSS
+        self.assertIn("left:'$$',right:'$$',display:true",_HTML)
+        self.assertIn("left:'$',right:'$',display:false",_HTML)
+        self.assertNotIn("left:'\\\\[",_HTML)
+        self.assertIn('.stmt', SITE_CSS)
+
     def test_unmodified_vendor_assets_and_public_delivery(self):
         vendor = ROOT / 'csp_exam/web/static/vendor/tabler/1.6.1'
         manifest = json.loads((vendor / 'vendor-manifest.json').read_text(encoding='utf-8'))

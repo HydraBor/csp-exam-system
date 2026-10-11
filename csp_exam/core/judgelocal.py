@@ -174,10 +174,8 @@ def store_problem(pid: str, cases: list[dict], statement: str = "") -> dict:
         shutil.rmtree(stage, ignore_errors=True)
     if statement and statement.strip():
         from . import store as _store
-        sp = os.path.join(_store.DATA_DIR, "statements", f"{pid}.md")
-        os.makedirs(os.path.dirname(sp), exist_ok=True)
-        with open(sp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(statement)
+        from . import database
+        database.save_statement(_store.DATA_DIR, pid, statement)
     return {"cases": len(cases), "bytes": total, "dir": d}
 
 
@@ -190,13 +188,9 @@ def drop_problem_data(pid: str) -> list:
         shutil.rmtree(d, ignore_errors=True)
         gone.append("测试点")
     from . import store as _store
-    sp = os.path.join(_store.DATA_DIR, "statements", f"{pid}.md")
-    if os.path.isfile(sp):
-        try:
-            os.remove(sp)
-            gone.append("题面")
-        except OSError:
-            pass
+    from . import database
+    if database.delete_statement(_store.DATA_DIR, pid):
+        gone.append("题面")
     return gone
 
 

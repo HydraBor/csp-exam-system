@@ -41,12 +41,12 @@ class APIContract(unittest.TestCase):
         paths = ["/admin/new", "/admin/delete", "/admin/roster", "/admin/reshuffle", "/admin/groups",
                  "/admin/exam", "/admin/release", "/admin/judge", "/admin/problem", "/admin/statement",
                  "/admin/problem-detail", "/admin/problem-reupload", "/admin/scan", "/admin/selftest", "/api/problemset/import"]
-        before = Path(store._path("contests.json")).read_bytes()
+        before = store.list_contests()
         for path in paths:
             for cookie in ("", student):
                 with self.subTest(path=path, student=bool(cookie)):
                     self.assertEqual(self.request("POST", path + "?c=" + cid + "&pid=P", {}, cookie=cookie)[0], 403)
-        self.assertEqual(Path(store._path("contests.json")).read_bytes(), before)
+        self.assertEqual(store.list_contests(), before)
 
     def test_all_teacher_reads_hide_sensitive_data(self):
         cid = self.contest()

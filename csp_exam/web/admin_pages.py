@@ -520,9 +520,7 @@ function cspRenderMath(root) {
     window.renderMathInElement(root, {
       delimiters: [
         { left: "$$", right: "$$", display: true },
-        { left: "\\\\[", right: "\\\\]", display: true },
-        { left: "$", right: "$", display: false },
-        { left: "\\\\(", right: "\\\\)", display: false }
+        { left: "$", right: "$", display: false }
       ],
       throwOnError: false,
       ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option"]
@@ -2341,12 +2339,14 @@ window.addEventListener('hashchange',openLinkedSource);
         cat = store.load_catalog()
         items = cat.get("items") or []
         err = ""
-        if not items:
-            try:
-                items = localoj.list_problems()
+        # The local registry is authoritative. An old cache can contain QA
+        # problems whose directories have already been archived.
+        try:
+            items = localoj.list_problems()
+            if items != cat.get('items'):
                 store.save_catalog(items)
-            except OSError as e:
-                err = f"读取评测站题库失败：{e}"
+        except OSError as e:
+            err = f"读取本地题库失败：{e}"
         codes = make_problem.load_codes()
         info = load_problem_info()
         titles = {str(it.get("pid", "")): str(it.get("title", "")) for it in items}
@@ -2381,23 +2381,9 @@ window.addEventListener('hashchange',openLinkedSource);
     def _statement_html(self, pid: str, cache_dir: str, fetch: bool) -> str:
         """题面 → HTML（服务端渲染，一份 Markdown 逻辑，见 core/markdown.py）。
 
-        本地缓存（`data/statements/<pid>.md`）有就直接渲染；没有的话**只对场上正在用
-        的题目**去评测站取一次（每取一次都是一次数据库查询，题库大了不能都取）。
+        每次读取 SQLite 正本，避免题库与比赛题面不同步。
         """
-        text = ""
-        path = os.path.join(cache_dir, f"{pid}.md")
-        if os.path.isfile(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    text = f.read()
-            except OSError:
-                text = ""
-        if not text.strip() and fetch:
-            try:
-                text = localoj.problem_statement(pid, cache_dir)
-            except Exception as e:                   # noqa: BLE001（评测站闹脾气不该让整页打不开）
-                log(f"[题目列表] 取题面 {pid} 失败：{e}")
-                text = ""
+        text = localoj.problem_statement(pid)
         return md_to_html(text) if text.strip() else ""
 
     def _catalog_view(self) -> tuple[list, list, list, dict, str]:
@@ -2591,7 +2577,7 @@ window.addEventListener('hashchange',openLinkedSource);
   if (!btn) return;
   btn.addEventListener('click', function () {{
     var note = document.getElementById('csp-refresh-note');
-    note.textContent = '　正在读评测站题库…';
+    note.textContent = '　正在读取题库…';
     fetch('/api/problems' + (window.CSP_KEY_QUERY || '') +
           ((window.CSP_KEY_QUERY || '') ? '&' : '?') + 'refresh=1')
       .then(function (r) {{ return r.json(); }})
@@ -2863,7 +2849,7 @@ window.addEventListener('hashchange',openLinkedSource);
     def _admin_problem_detail_post(self):
         """保存题目详情页的改动：**题面 + 题目名 + 英文名 + 时限 + 内存**。
 
-        分两处落盘：题面写 `data/statements/<pid>.md`（`localoj.set_problem_statement`），
+        题面和元信息均保存到 SQLite（`localoj.set_problem_statement`），
         题目名/英文名/时限/内存写编号登记与题目信息（`remember_meta`）。
         任何一处失败都**如实报出来**（绝不说"保存好了"）—— 老师要靠这句话判断能不能走开。
         """
@@ -3084,17 +3070,16 @@ window.addEventListener('hashchange',openLinkedSource);
         if not self._check_admin(q.get("key", "")):
             self._json({"ok": False, "error": "管理密钥不正确"}, 403)
             return
-        refresh = q.get("refresh") in ("1", "true", "yes")
         cat = store.load_catalog()
         items = cat.get("items") or []
         err = ""
-        if refresh or not items:
-            try:
-                items = localoj.list_problems()
+        try:
+            items = localoj.list_problems()
+            if items != cat.get('items'):
                 store.save_catalog(items)
                 cat = store.load_catalog()
-            except OSError as e:
-                err = f"读取评测站题库失败：{e}"
+        except OSError as e:
+            err = f"读取本地题库失败：{e}"
         codes = make_problem.load_codes()
         info = load_problem_info()
         out = []
@@ -3149,15 +3134,7 @@ window.addEventListener('hashchange',openLinkedSource);
     def _admin_statement(self, q: dict, flash: str = "", flash_kind: str = "ok"):
         """**改题面**（已有题目，不用删了重建）：一个 Markdown 编辑框 + 预览 + 保存。
 
-        题面的"真身"在**评测站**那边（题目文档的 `content` 字段，`localoj.problem_statement()`
-        读的就是它）；考试服务这边 `data/statements/<pid>.md` 只是**6 小时缓存**。
-        所以保存要**两处都写**：先写评测站，成功后再把缓存覆盖成新文本 ——
-        只写缓存的话，缓存一过期题面就"自己变回去"了（老师会以为白改了，踩过这个坑的机制见
-        `hydro_client.set_problem_statement` 的注释）。
-
-        编辑时**以评测站上的为准**（`ttl=0` 强制重取）：缓存可能过期、也可能被人手改过，
-        拿缓存当编辑起点会把过期的题面写回去。评测站取不到（容器没起来）时函数会退回缓存，
-        页面顶部会提示。
+        题面保存在 SQLite 中，管理端与考试页读取同一份内容。
         """
         key = q.get("key", "")
         if not self._check_admin(key):
@@ -3176,10 +3153,10 @@ window.addEventListener('hashchange',openLinkedSource);
             try:
                 text = localoj.problem_statement(pid, cache_dir=cache_dir, ttl=0)
             except Exception as e:                        # noqa: BLE001
-                warn = f"从评测站取题面失败（下面是本地缓存里那份）：{e}"
+                warn = f"读取题面失败：{e}"
                 text = self._statement_raw(pid, cache_dir)
             if not text.strip():
-                warn = warn or ("这道题在评测站上还没有题面 —— 保存之后就有了。")
+                warn = warn or ("这道题还没有题面，保存之后即可查看。")
                 text = self._statement_raw(pid, cache_dir)
         head_json = _js_json(f'<code>{code or pid}</code> {title}'
                              + (f' · <code>{gname}</code>' if gname else ''))
@@ -3191,7 +3168,7 @@ window.addEventListener('hashchange',openLinkedSource);
 {warn and f'<p class="warn">{html.escape(warn)}</p>' or ""}
 <p class="muted">正在改：<b>{html.escape(title or pid)}</b>
    （题目编号 <b>{html.escape(code or "—")}</b>，英文名 <code>{html.escape(gname or "—")}</code>）<br>
-   学生打开题面页看到的就是这里的内容。<b>保存后立刻生效</b>（评测站那份和本站缓存一起更新）。
+   学生打开题面页看到的就是这里的内容。<b>保存后立刻生效</b>（比赛页重新打开或自动刷新题面后即可看到）。
    只改题面 —— 测试数据、时限、标程都不动。</p>
 <form method="post" action="{statement_url(key, pid)}">
 <input type="hidden" name="pid" value="{html.escape(pid, quote=True)}">
@@ -3202,7 +3179,7 @@ window.addEventListener('hashchange',openLinkedSource);
   <textarea id="stmt-src" name="statement" spellcheck="false"
             style="min-height:420px">{html.escape(text)}</textarea>
   <p style="margin-top:14px"><button type="submit">保存题面</button>
-     <span class="muted">（写评测站 + 刷本站缓存）</span></p>
+     <span class="muted">（保存题面）</span></p>
 </div>
 </form>
 {_view_modal()}
@@ -3243,18 +3220,11 @@ window.addEventListener('hashchange',openLinkedSource);
         self._send(page(f"改题面 · {title or pid}", body, math=True))
 
     def _statement_raw(self, pid: str, cache_dir: str) -> str:
-        """只读本地缓存里那份题面原文（Markdown，不渲染）。"""
-        path = os.path.join(cache_dir, f"{pid}.md")
-        if not pid or not os.path.isfile(path):
-            return ""
-        try:
-            with open(path, encoding="utf-8") as f:
-                return f.read()
-        except OSError:
-            return ""
+        """读取 SQLite 中的题面原文。"""
+        return localoj.problem_statement(pid)
 
     def _admin_statement_post(self):
-        """保存题面：**先写评测站**（真身），成功后再把本地缓存覆盖掉。"""
+        """保存 SQLite 中的题面。"""
         q = self._query()
         key = q.get("key", "")
         if not self._check_admin(key):
@@ -3275,24 +3245,9 @@ window.addEventListener('hashchange',openLinkedSource);
             log(f"[管理端] 改题面失败 {pid}：{r.get('error')}")
             self._redirect(statement_url(key, pid, msg=f"保存失败：{r.get('error')}（题面没有改动）"))
             return
-        # 评测站写成功了，再把本站缓存刷成新文本（否则读的还是旧题面）
-        cache_dir = os.path.join(store.DATA_DIR, "statements")
-        wrote_cache = False
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            with open(os.path.join(cache_dir, f"{pid}.md"), "w", encoding="utf-8",
-                      newline="\n") as f:
-                f.write((text or "").replace("\r\n", "\n").replace("\r", "\n"))
-            wrote_cache = True
-        except OSError as e:
-            log(f"[管理端] 改题面 {pid}：评测站写了，但刷本地缓存失败 {e!r}")
         title = str((load_problem_info().get(pid) or {}).get("title") or pid)
-        log(f"[管理端] 改题面 {pid}（{title}）：评测站 {r.get('field')} 已更新"
-            + ("，本地缓存已刷新" if wrote_cache else "，本地缓存刷新失败"))
-        msg = (f"题面已保存（{title}）—— 学生现在打开题面看到的就是新的了。"
-               if wrote_cache else
-               f"评测站上的题面已更新，但本站缓存没刷上（{title}）—— 最多 6 小时后会自己同步，"
-               f"着急的话重启一下服务。")
+        log(f"[管理端] 改题面 {pid}（{title}）：SQLite 已更新")
+        msg = f"题面已保存（{title}）—— 学生重新打开题面即可看到更新。"
         self._redirect(statement_url(key, pid, msg=msg))
 
     def _admin_problem(self, q: dict, flash: str = "", scan: dict | None = None,
@@ -3734,7 +3689,7 @@ window.addEventListener('hashchange',openLinkedSource);
 
      ① 传输阶段：用 `xhr.upload.onprogress` 报**真实百分比**（还有已传/总大小、速度）
      ② 服务端阶段：传完（`xhr.upload.onload`）之后进度条变成流动条纹，提示
-        "正在解包/配对测试点/导入评测站，别关页面" —— 这一段服务端没有细粒度进度
+        "正在解包/配对测试点/保存题库，别关页面" —— 这一段服务端没有细粒度进度
         （建题是同步跑的，见 core/problems.create_problem），所以只报"在跑"，不报百分比，
         不瞎编数字。
 
@@ -3821,7 +3776,7 @@ window.addEventListener('hashchange',openLinkedSource);
     if (titleEl) titleEl.textContent = '正在上传出题文件夹…';
     if (noteEl) {{
       noteEl.innerHTML = '一共约 ' + mb(bytes) + '。传完由服务端解包、配对测试点、'
-        + '导入评测站。';
+        + '保存题库。';
     }}
 
     var xhr = new XMLHttpRequest();
@@ -3854,7 +3809,7 @@ window.addEventListener('hashchange',openLinkedSource);
       if (fill) fill.style.width = '100%';
       if (bar) bar.classList.add('busy');
       if (noteEl) {{
-        noteEl.innerHTML = '正在解包、配对测试点、导入评测站 —— 一道题通常十几秒，'
+        noteEl.innerHTML = '正在解包、配对测试点、保存题库 —— 一道题通常十几秒，'
           + '数据多或题库大时更久。<b>这一段没有细粒度进度，请别关页面、别刷新</b>，'
           + '跑完会自动跳转。<br>出题文件夹已经不在浏览器手里了（可以放心去电脑上改文件）。';
       }}

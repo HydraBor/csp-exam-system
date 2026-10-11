@@ -28,6 +28,8 @@ import threading
 import time
 import urllib.parse
 import html
+import hashlib
+import json
 
 from ..core import grading, localoj, store, wrapper, submissions
 from ..core import contest_time
@@ -922,15 +924,45 @@ class StudentPages:
         nav = self._nav(kaohao, cid, name=store.student_name(cid, kaohao),
                         extra=(f'<a href="/sample?c={cid}&p={prob["no"]}">下载大样例</a>'
                                if has_samples(pid) else ""))
-        head = (f'<p>{rule_badge(contest)} {level_badge(contest)}'
+        head = (f'<div class="problem-heading"><p>{rule_badge(contest)} {level_badge(contest)}'
                 f' <b>{html.escape(contest["title"])}</b></p>'
                 f'<h2>第 {prob["no"]} 题 · {html.escape(slug)}'
                 f'<span class="muted"> {html.escape(str(prob.get("title") or ""))}'
-                f' · 满分 {full}</span></h2>')
+                f' · 满分 {full}</span></h2></div>')
+        revision = hashlib.sha256((text + json.dumps(prob, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
         if not text.strip():
             body = (nav + head + self._flash("err", "这道题还没有题面（老师还没写/还没同步过来）。"))
         else:
-            body = nav + head + f'<div class="card stmt">{md_to_html(text)}</div>'
+            body = nav + head + f'<div class="card stmt" data-version="{revision}">{md_to_html(text)}</div>'
+            body += r'''<script>
+(function () {
+  var busy = false;
+  async function refreshStatement() {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      var response = await fetch(location.href, {cache: 'no-store', credentials: 'same-origin'});
+      if (!response.ok) return;
+      var next = new DOMParser().parseFromString(await response.text(), 'text/html');
+      var incoming = next.querySelector('.stmt[data-version]');
+      var current = document.querySelector('.stmt[data-version]');
+      if (!incoming || !current || incoming.dataset.version === current.dataset.version) return;
+      current.innerHTML = incoming.innerHTML;
+      current.dataset.version = incoming.dataset.version;
+      var heading = document.querySelector('.problem-heading');
+      var newHeading = next.querySelector('.problem-heading');
+      if (heading && newHeading) heading.innerHTML = newHeading.innerHTML;
+      document.title = next.title;
+      if (window.renderMathInElement) renderMathInElement(current, {
+        delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],
+        ignoredTags: ['script','noscript','style','textarea','pre','code'], throwOnError:false
+      });
+    } catch (_) {} finally { busy = false; }
+  }
+  setInterval(refreshStatement, 15000);
+  document.addEventListener('visibilitychange', function () {if (!document.hidden) refreshStatement();});
+})();
+</script>'''
         self._send(page(f"题面 · {slug}", body, math=True))
 
     def _sample_page(self, kaohao: str, contest: dict, cid: str, pno: str, want: str = ""):

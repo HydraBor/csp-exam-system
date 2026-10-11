@@ -31,6 +31,25 @@ class Management(unittest.TestCase):
         self.assertEqual(judgelocal.cases_of("P")[0]["out"],b"5\n")
         self.assertEqual(localoj.problem_statement("P"),"# 原题面")
         self.assertEqual(problems.load_codes(),before)
+
+    def test_private_library_export_round_trip(self):
+        from csp_exam.tools.export_library import export
+        target=Path(self.temp.name).parent/(Path(self.temp.name).name+'-library.zip')
+        try:
+            self.assertEqual(export(target,['P'])['problems'],1)
+            with zipfile.ZipFile(target) as archive:
+                config=json.loads(archive.read('P/liteoj-seed.json'))
+                self.assertEqual((config['id'],config['timeLimit'],config['csp']['submissionName']),('P',1000,'sum'))
+                self.assertEqual(sum(c['score'] for c in config['cases']),100)
+                self.assertEqual(archive.read('P/data/1.out'),b'5\n')
+                manifest=json.loads(archive.read('library-manifest.json'))
+                self.assertIn('P/题目.md',manifest['sha256'])
+                files={n:archive.read(n) for n in archive.namelist() if n.startswith('P/')}
+            result=problems.create_problem('P','',files,overwrite=True)
+            self.assertTrue(result['ok'],result)
+            self.assertEqual(localoj.problem_statement('P'),'# 原题面')
+            self.assertEqual(problems.name_of_pid('P'),'sum')
+        finally:target.unlink(missing_ok=True)
     def test_limits_change_withdraws_and_blocks_release(self):
         self.result();store.set_released(self.cid,True)
         problems.remember_problem("P",time_ms=1200)
@@ -67,5 +86,33 @@ class Management(unittest.TestCase):
         p=Path(self.temp.name)/"empty.zip"
         with zipfile.ZipFile(p,"w"):pass
         self.assertFalse(importer.import_problemset(str(p),dry_run=True,log=lambda *args:None)["ok"])
+
+    def test_title_edit_updates_running_contest_and_retains_history(self):
+        self.result()
+        old_snapshot=store.load_results(self.cid)['K']['submission_exam']
+        problems.remember_problem('P',title='加法修订')
+        self.assertEqual(store.load_exam(self.cid)['problems'][0]['title'],'加法修订')
+        self.assertEqual(store.load_results(self.cid)['K']['submission_exam'],old_snapshot)
+        self.assertFalse(store.load_results(self.cid)['K'].get('rejudge_error'))
+
+    def test_overwrite_updates_contest_statement_data_and_keeps_number(self):
+        number=problems.code_of_pid('P')
+        report=problems.create_problem('P','加法重传',{'1.in':b'7 8\n','1.out':b'15\n'},
+                                      overwrite=True,statement='# 新题面 $a_i$',name='sum')
+        self.assertTrue(report['ok'])
+        self.assertEqual(report['number'],number)
+        self.assertEqual(store.load_exam(self.cid)['problems'][0]['title'],'加法重传')
+        self.assertEqual(store.load_exam(self.cid)['problems'][0]['name'],'sum')
+        self.assertEqual(localoj.problem_statement('P'),'# 新题面 $a_i$')
+        self.assertEqual(judgelocal.cases_of('P')[0]['out'],b'15\n')
+
+    def test_archived_qa_problem_does_not_survive_catalog_cache(self):
+        from csp_exam.web.server import Handler
+        store.save_catalog([{'pid':'_engine_acceptance','title':'_engine_acceptance'}])
+        handler=object.__new__(Handler)
+        rows,error=handler._catalog_rows()
+        self.assertEqual(error,'')
+        self.assertEqual([row['pid'] for row in rows],['P'])
+        self.assertNotIn('_engine_acceptance',[p['pid'] for p in store.load_catalog()['items']])
 
 if __name__=="__main__":unittest.main()

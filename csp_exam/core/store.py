@@ -1,5 +1,8 @@
 """CSP 训练站 —— 数据存储层（多比赛版）。
 
+业务正本已迁入 csp-exam.sqlite3。下面的 JSON 名称是适配层的逻辑集合键，
+用于理解旧格式与迁移，不再代表运行时读写的业务文件。交卷文件仍独立保存。
+
 目录结构：
 
     data/
@@ -127,6 +130,10 @@ def _path(*parts: str) -> str:
 
 
 def _load(path: str, default):
+    from . import database
+    key = database.key_for(DATA_DIR, path)
+    if key is not None:
+        return database.load(DATA_DIR, key, default)
     if not os.path.exists(path):
         return default() if callable(default) else default
     try:
@@ -137,11 +144,22 @@ def _load(path: str, default):
 
 
 def _save(path: str, data) -> None:
+    from . import database
+    key = database.key_for(DATA_DIR, path)
+    if key is not None:
+        database.save(DATA_DIR, key, data)
+        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
+
+def _exists(path: str) -> bool:
+    from . import database
+    key = database.key_for(DATA_DIR, path)
+    return database.exists(DATA_DIR, key) if key is not None else os.path.exists(path)
 
 
 # ------------------------------------------------------------------ 学生池（老数据迁移用）
@@ -300,14 +318,14 @@ def _migrate_if_needed() -> None:
     legacy_exam = _path("exam.json")
     legacy_roster = _path("roster.json")
     legacy_results = _path("results.json")
-    if os.path.exists(_index_path()) or not os.path.exists(legacy_exam):
+    if _exists(_index_path()) or not _exists(legacy_exam):
         return
     with _LOCK:
         exam = _load(legacy_exam, dict) or {}
         roster = _load(legacy_roster, dict) or {}
         results = _load(legacy_results, dict) or {}
         # 老的 roster.json 就是全局学生池，搬到 students.json
-        if roster and not os.path.exists(_students_path()):
+        if roster and not _exists(_students_path()):
             _save(_students_path(), roster)
         _save(_index_path(), [{
             "id": "c1", "title": exam.get("title") or "CSP 模拟赛",
@@ -430,6 +448,8 @@ def delete_contest(cid: str) -> bool:
                for r in load_results(cid).values()):
             raise ValueError("本场仍有排队或正在评测的提交，不能删除。")
         save_contests(keep)
+        from . import database
+        database.delete(DATA_DIR, "contests/" + cid)
         shutil.rmtree(os.path.join(DATA_DIR, "contests", cid), ignore_errors=True)
         return True
 
@@ -457,6 +477,21 @@ def save_exam(cid: str, exam: dict) -> None:
             exam = dict(exam, released=False)
             update_contest(cid, released=False)
         _save(_cp(cid, "exam.json"), exam)
+
+
+def sync_problem_title(pid: str, title: str, previous: str = "") -> None:
+    """Refresh copied titles while retaining a teacher's custom contest title."""
+    with _LOCK:
+        for contest in list_contests():
+            cid = contest['id']
+            exam = load_exam(cid)
+            changed = False
+            for problem in exam.get('problems', []):
+                if problem.get('pid') == pid and problem.get('title', '') in ('', previous):
+                    problem['title'] = title
+                    changed = True
+            if changed:
+                save_exam(cid, exam)
 
 
 def _migrate_roster(cid: str, data) -> dict[str, dict]:
