@@ -336,6 +336,9 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
             return
 
         # ---- 管理端
+        if path == "/admin/problem-export":
+            from .problem_export import route
+            return route(self, q)
         if path == "/admin":
             key = q.get("key", "")
             if not self._check_admin(key):

@@ -415,6 +415,12 @@ def detect_bundle(files: dict[str, bytes]) -> dict:
         prob = ip.parse_problem(bundle, prefix, pid, title, {})
         children = ip.problem_children(bundle, prefix)
         big, small, notes = collect_samples(children, pid)
+        if prob.get("portable") is not None:
+            portable_items = prob["portable"]["samples"]
+            # The exact manifest is restored later; these lists only describe counts.
+            big = [i for i in portable_items if i["kind"] == "big"]
+            small = [i for i in portable_items if i["kind"] == "sample"]
+            notes = []
         prob["big_samples"] = big
         prob["samples"] = small
         prob["sample_notes"] = notes
@@ -720,7 +726,7 @@ def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
         time_ms = config.get("time_ms", time_ms)
         memory_mb = config.get("memory_mb", memory_mb)
         name = name or config.get("name", "")
-        cases = [{"name": str(i), "in": c[1], "out": c[2]}
+        cases = [{"name": str(c[0]) if prob.get("portable") is not None else str(i), "in": c[1], "out": c[2]}
                  for i, c in enumerate(prob["cases"], 1)]
         if not pid:
             pid = prob["pid"]                    # 没填标识就用分类号（题库内部标识）
@@ -823,12 +829,29 @@ def create_problem(pid: str, title: str, uploads: dict[str, bytes], *,
     }
     # 大样例 / 题目样例：存到考试服务这边，学生能在考试页下载（Hydro 那边不加，
     # 免得样例被当成评测数据参与计分）
-    if prob and (prob["big_samples"] or prob["samples"]):
+    if ok and prob and prob.get("portable") is not None:
+        from .problem_export import restore_samples
+        sample_info = restore_samples(pid, prob["portable"]["samples"], files,
+                                      ip.problem_children(MemoryBundle(files), prob["prefix"]))
+        out["samples"] = sample_info
+    elif ok and prob and (prob["big_samples"] or prob["samples"]):
         sample_info = save_samples(pid, [prob["big_samples"], prob["samples"]], files)
         out["samples"] = sample_info
     if ok:
         remember_problem(pid, title=title, code=number, name=name, cases=len(cases),
                          time_ms=time_ms, memory_mb=memory_mb, std=std_source)
+        if prob and prob.get("portable") is not None:
+            # An exported empty standard solution must clear any prior solution.
+            from . import database
+            with database.transaction(store.DATA_DIR):
+                items = load_problem_info()
+                items[pid]["std"] = std_source
+                items[pid]["name"] = name
+                save_problem_info(items)
+                codes = load_codes()
+                codes[pid]["name"] = name
+                save_codes(codes)
+                localoj.set_problem_statement(pid, statement)
         if exists:
             store.invalidate_problem_results(pid, "题目数据已更新，请重测")
         try:      # 导入成功后刷新题库缓存，配题时立刻能搜到

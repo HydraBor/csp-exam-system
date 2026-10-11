@@ -248,6 +248,16 @@ def parse_problem(bundle: Bundle, prefix: str, pid: str, title: str,
     errors.extend(x for x in issues if "没有对应" in x or "有答案" in x or "重复" in x)
     pairs = [(i, children[c['in']], children[c['out']]) for i, c in enumerate(cases, 1) if c['out']]
 
+    portable = None
+    if "csp-package.json" in children:
+        from .problem_export import validate_package
+        try:
+            portable = validate_package(bundle, children)
+            pairs = portable["cases"]
+            errors = []  # Portable packages declare cases explicitly, including sample-like names.
+        except (ValueError, TypeError, KeyError, UnicodeError) as e:
+            errors.append("CSP 导出题包无效：" + str(e))
+
     config = {}
     if "problem.json" in children:
         try:
@@ -297,7 +307,7 @@ def parse_problem(bundle: Bundle, prefix: str, pid: str, title: str,
         "difficulty": difficulty_of(meta.get("难度", "")),
         "topics": split_topics(meta.get("考点", "")),
         "index_no": meta.get("编号", ""),
-        "warnings": [], "errors": errors, "config": config,
+        "warnings": [], "errors": errors, "config": config, "portable": portable,
     }
 
 
@@ -376,9 +386,9 @@ def import_problemset(source: str, *, tags: list[str] | None = None,
             problems = list(prob.get("errors") or [])
             if not prob["cases"]:
                 problems.append("没有找到成对的 .in/.out（或 .in/.ans）测试数据")
-            if not prob["statement"]:
+            if not prob["statement"] and prob.get("portable") is None:
                 problems.append("没有找到题面（题目.md）")
-            if not prob["std"]:
+            if not prob["std"] and prob.get("portable") is None:
                 problems.append("没有找到标程（标程.cpp）")
             if problems:
                 entry["status"] = "failed"
@@ -422,7 +432,7 @@ def import_problemset(source: str, *, tags: list[str] | None = None,
                         report["problems"].append(entry)
                         continue
                     got = _mk.create_problem(pid, title, uploads, time_ms=time_ms, memory_mb=memory_mb,
-                                             statement=prob["statement"], std_source=_decode(bundle.read(prob["std"])),
+                                             statement=prob["statement"], std_source=_decode(bundle.read(prob["std"])) if prob["std"] else "",
                                              overwrite=overwrite, name=want, tags=extra_tags + prob["topics"])
             except (ValueError, OSError) as exc:
                 # 单题格式或存储错误应进入逐题报告，不能抹掉先前成功题目的报告。

@@ -39,7 +39,7 @@ from ..core.grading import graded_cell, graded_text
 from ..core.util import log, _fmt_bytes, _fmt_ms, _fmt_kb
 from ..config import (MAX_PS_UPLOAD, PORT, PS_JOBS, PS_JOBS_LOCK,
                       )
-from .urls import admin_url, cid_query, problem_detail_url, statement_url
+from .urls import admin_url, cid_query, problem_detail_url, statement_url, problem_export_url
 from .ui import (page, rule_badge, render_upload_tree_html, md_to_html,
                  level_badge, modal, code_pre)
 from .tabler_theme import components
@@ -2449,6 +2449,7 @@ window.addEventListener('hashchange',openLinkedSource);
                                        "用在本场：" + "、".join(used[pid])) if x)
         ops = (f'<div class="prob-ops">'
                f'<a class="btn btn-sm btn-gray" href="{problem_detail_url(key, pid)}">查看题面</a>'
+               f'<a class="btn btn-sm btn-gray" href="{problem_export_url(key, pid)}">导出 ZIP</a>'
                f'<button type="button" class="btn btn-sm" data-test="{esc(pid)}">自己测试</button>'
                f'<button type="button" class="btn btn-sm btn-danger" data-del="{esc(pid)}" '
                f'data-title="{esc(title_txt or pid)}">删除</button>'
@@ -2545,6 +2546,7 @@ window.addEventListener('hashchange',openLinkedSource);
  老师只用它定位这道题；<b>英文名</b>是学生在比赛里看到的名字（加进比赛时可以按场次再改）。
  点「查看题面」进这道题的<b>详情页</b>（左边 Markdown 原文可以直接改，右边就是学生看到的样子，
  同一页还能看标程）；点「自己测试」拿代码跑一遍全部测试点，确认数据与时限设置没问题。
+ 点「导出 ZIP」下载完整题包，可在另一台相同系统的「新建题目」直接上传；包含标程与答案，请妥善保存。
  删除是**从列表里收起来**（题面、提交记录都留着），删完页面停在原地，不跳回顶部。</p>
 {"<p class='warn'>" + html.escape(err) + "（下面这份清单来自考试服务自己的记录）</p>" if err else ""}
 <p><a class="btn" href="{admin_url(key, path='/admin/problem')}">+ 新建题目</a>
@@ -2635,6 +2637,8 @@ window.addEventListener('hashchange',openLinkedSource);
             self._send(page("题目详情", self._admin_nav(key) + back +
                             self._flash("err", f"题库里没有「{pid}」这道题。")), 404)
             return
+        if not rec.get("deleted"):
+            back = back.replace('</p>', f' <a class="btn btn-gray" href="{problem_export_url(key, pid)}">导出 ZIP</a></p>')
         cache_dir = os.path.join(store.DATA_DIR, "statements")
         text = localoj.problem_statement(pid) or self._statement_raw(pid, cache_dir)
         title = str(rec.get("title") or pid)
