@@ -50,6 +50,11 @@ def _deadline_ts(contest: dict) -> int:
     return contest_time.window(contest)[1]
 
 
+def _release_text(contest):
+    return ("成绩在最后允许开考时间加考试时长之后，评测完成时统一开放" if contest_time.flexible(contest)
+            else "成绩由老师在考试结束后统一公布")
+
+
 def _dur_text(minutes) -> str:
     """时长文案：240 → "4 小时"、210 → "3 小时 30 分钟"（`store.duration_of` 给分钟数）。"""
     try:
@@ -68,11 +73,15 @@ class StudentPages:
     """学生端的所有页面（由 web.server.Handler 混入）。"""
 
     def _contest_status(self, contest, cid, status=200):
-        state = contest_time.phase(contest)
+        kaohao = self._student(cid)
+        state = contest_time.student_phase(contest, kaohao)
         self._contest_clock = (cid, state)
         start, end = contest_time.window(contest)
         q = urllib.parse.quote(cid)
-        kaohao = self._student(cid)
+        personal = contest_time.student_window(contest, kaohao)
+        flexible = contest_time.flexible(contest)
+        wait_note = ("开放后请点击“开始考试”，点击时才开始个人计时。" if flexible
+                     else "你已进入候考区，开考后将自动进入考试。")
         name = store.student_name(cid, kaohao) if kaohao else ""
         action = (f'<a class="btn btn-sm btn-outline-secondary" href="/logout?c={q}">退出登录</a>'
                   if kaohao else f'<a class="btn btn-sm btn-outline-secondary" href="/enter?c={q}">返回登录</a>')
@@ -86,13 +95,22 @@ class StudentPages:
             left = max(0, int(start - time.time()))
             shown = f"{left // 3600:02d}:{left % 3600 // 60:02d}:{left % 60:02d}"
             body += ('<div class="card card-body bg-blue-lt border-0 text-center p-4 p-md-5 mb-4">'
-                     '<div class="subheader text-primary">距离考试开始</div>'
+                     f'<div class="subheader text-primary">{"距离允许开考" if flexible else "距离考试开始"}</div>'
                      f'<div id="wait-countdown" class="display-4 font-monospace fw-bold text-primary my-3" '
                      f'style="font-variant-numeric:tabular-nums">{shown}</div>'
                      '<p id="wait-status" class="text-secondary mb-0" role="status">'
-                     '你已进入候考区，开考后将自动进入考试。</p></div>')
+                     f'{wait_note}</p></div>')
+        elif state == "ready":
+            button = (f'<form method="post" action="/start?c={q}"><button class="btn btn-primary" type="submit">开始考试</button></form>'
+                      if kaohao else f'<a class="btn btn-primary" href="/enter?c={q}">凭考号登录开考</a>')
+            body += ('<div class="card card-body text-center p-4 p-md-5 mb-4">'
+                     '<div class="h2 mb-3">现在可以开始考试</div>'
+                     f'<p id="wait-status" class="text-secondary" role="status">点击后立即开始 {_dur_text(store.duration_of(contest))} 的个人计时。'
+                     '退出、断网和刷新均不会暂停或重新计时。</p>' + button + '</div>')
         else:
             note = "请等待老师设置考试时间，页面会自动更新。" if state == "unscheduled" else "本场考试已结束，不能再提交或修改代码。"
+            if flexible and state == "ended":
+                note = "你的考试已结束或已错过开考时间段，不能再提交。请等待全场统一开放成绩。"
             body += ('<div class="card card-body text-center p-4 p-md-5 mb-4">'
                      f'<div class="h2 mb-3">{contest_time.LABELS[state]}</div>'
                      f'<p id="wait-status" class="text-secondary mb-0" role="status">{note}</p></div>')
@@ -101,13 +119,24 @@ class StudentPages:
                 ("结束时间（北京时间）", html.escape(contest_time.display(end))),
                 ("考试时长", _dur_text(store.duration_of(contest))),
                 ("成绩公布", "考试结束后由老师统一公布")]
+        if flexible:
+            info = [("组别", level_badge(contest)), ("赛制", rule_badge(contest)),
+                    ("考试模式", "自主开考"),
+                    ("允许开考（北京时间）", html.escape(contest_time.display(start) + " 至 " + contest_time.display(end))),
+                    ("个人考试时长", _dur_text(store.duration_of(contest))),
+                    ("成绩统一开放", html.escape(contest_time.display(contest_time.finish_at(contest))) + " 后，评测完成时开放")]
+            from ..core import attempts
+            attempt = attempts.get(cid, kaohao)
+            if attempt:
+                info += [("你的开始时间", html.escape(contest_time.display(personal[0]))),
+                         ("你的截止时间", html.escape(contest_time.display(personal[1])))]
         body += ('<div class="card card-body p-4 mb-4"><div class="datagrid">' +
                  ''.join(f'<div class="datagrid-item"><div class="datagrid-title">{label}</div>'
                          f'<div class="datagrid-content">{value}</div></div>' for label, value in info) + '</div></div>')
-        if state == "ended" and store.load_exam(cid).get("released"):
+        if state == "ended" and contest_time.phase(contest) == "ended" and store.load_exam(cid).get("released"):
             body += (f'<div class="d-flex gap-2 mb-3"><a class="btn btn-primary" href="/score?c={q}">查看已公布成绩</a>'
                      f'<a class="btn btn-outline-secondary" href="/scoreboard?c={q}">排行榜</a></div>')
-        if state in ("pending", "unscheduled"):
+        if state in ("pending", "unscheduled", "ready"):
             body += ('<p class="text-secondary small">开考前不显示题目。请保持页面打开；如网络中断，恢复后会自动重试。</p>'
                      f'<noscript><p>请启用 JavaScript 以使用倒计时和自动进入，或<a href="/hall?c={q}">点击刷新</a>。</p></noscript>')
         self._send(page(contest["title"], body + '</section>', show_title=False), status)
@@ -123,6 +152,7 @@ class StudentPages:
 {self._flash('err', error) if error else ''}
 <div class="card">
 {head}
+{('<p class="text-secondary">允许开考时间段内首次成功登录即开始个人计时；提前登录先进入候考区。退出、断网和刷新不会暂停或重置计时。</p>' if contest_time.flexible(contest) else '')}
 <form method="post" action="/enter">
 {f'<input type="hidden" name="c" value="{html.escape(cid)}">' if cid else ''}
 <input type="text" name="kaohao" placeholder="考号（如 GD-S48213）" autofocus
@@ -152,9 +182,7 @@ class StudentPages:
                 self._login_page(f"考号「{kaohao}」不在本场名单里，请核对（注意大小写和中间的短横）。",
                                  contest)
                 return
-            self._redirect(f"/hall?c={urllib.parse.quote(cid)}",
-                           cookie=f"csp={make_cookie(cid, kaohao)}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax")
-            return
+            return self._enter_authenticated(contest, kaohao)
         # 没带考试 id：按考号找考场
         hits = store.find_contests_of_kaohao(kaohao)
         if not hits:
@@ -171,8 +199,29 @@ class StudentPages:
                             f"<ul>{links}</ul>"), 409)
             return
         c = hits[0]
-        self._redirect(f"/hall?c={urllib.parse.quote(c['id'])}",
-                       cookie=f"csp={make_cookie(c['id'], kaohao)}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax")
+        self._enter_authenticated(c, kaohao)
+
+    def _enter_authenticated(self, contest, kaohao):
+        # A deliberate successful login within the opening window starts at once.
+        # Logging in before it only authenticates the waiting page.
+        from ..core import attempts
+        if contest_time.flexible(contest) and contest_time.student_phase(contest, kaohao) == "ready":
+            attempts.start(contest["id"], kaohao)
+        self._redirect(f"/hall?c={urllib.parse.quote(contest['id'])}",
+                       cookie=f"csp={make_cookie(contest['id'], kaohao)}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax")
+
+    def _do_start(self):
+        cid = self._query().get("c", "")
+        kaohao = self._student(cid)
+        self._form()
+        if not kaohao or kaohao not in store.load_roster(cid):
+            return self._json({"error": "请先凭本场考号登录。"}, 403)
+        from ..core import attempts
+        try:
+            attempts.start(cid, kaohao)
+        except contest_time.ClosedContest:
+            return self._contest_status(store.get_contest(cid), cid, 403)
+        self._redirect(f"/hall?c={urllib.parse.quote(cid)}")
 
     def _contests_page(self, kaohao: str, error: str = ""):
         """只显示已认证的场次；其他场次的同号可能属于另一名学生。"""
@@ -251,7 +300,7 @@ class StudentPages:
         return student_status_cell(contest, exam, result, prob)
 
     def _hall_page(self, kaohao: str, contest: dict, cid: str):
-        if contest_time.phase(contest) != "running":
+        if contest_time.student_phase(contest, kaohao) != "running":
             return self._contest_status(contest, cid)
         exam = store.load_exam(cid)
         result = store.load_results(cid).get(kaohao)
@@ -261,7 +310,7 @@ class StudentPages:
                 f'<p>{rule_badge(contest)} {level_badge(contest)}'
                 f' <b>{html.escape(contest["title"])}</b>'
                 f'<span class="muted"> · {html.escape(rule_tip(contest))}</span></p>',
-                timer_bar(_deadline_ts(contest), store.duration_of(contest))]
+                timer_bar(contest_time.student_window(contest, kaohao)[1], store.duration_of(contest))]
         if result:
             at = html.escape(str(result.get("submitted_at") or ""))
             body.append(self._flash("ok", f"已提交（{at}）。可以反复提交，离场前确认交的是最终版本。"))
@@ -361,7 +410,7 @@ class StudentPages:
 
         比赛时间窗口之外不显示上传表单；服务端独立校验同一个时间窗口。
         """
-        if contest_time.phase(contest) != "running":
+        if contest_time.student_phase(contest, kaohao) != "running":
             return ('<h2>提交代码</h2><div class="card">'
                     '<p class="muted" style="margin:0">本场提交已关闭，不能再交/改交。</p>'
                     '</div>')
@@ -506,10 +555,10 @@ class StudentPages:
 
         flash = self._flash("ok", f"收到你交的 {len(files)} 个文件。下面先核对文件名和目录结构；"
                                   "考试期间不显示任何判分信息（没有编译结果、没有测试点、"
-                                  "没有分数），成绩由老师在考试结束后统一公布。")
+                                  f"没有分数），{_release_text(contest)}。")
         nxt = ["可以<b>反复提交</b>，每道题以<b>最后一次</b>提交的代码为准——离场前确认交的是最终版本。",
                "改了代码就<b>重新交一次整个考号文件夹</b>，不要只交单个文件。",
-               "考试期间不显示编译信息、测试点和分数，交完就等老师公布；"
+               "考试期间不显示编译信息、测试点和分数，交完请等待全场统一公布；"
                "公布后可在「查成绩」页逐题查看。"]
         body = (nav + flash +
                 '<h2>文件结构检查</h2><div class="card">'
@@ -528,7 +577,7 @@ class StudentPages:
 
     def _help_page(self, cid: str = ""):
         scheduled = store.get_contest(cid) if cid else None
-        if scheduled and contest_time.phase(scheduled) != "running":
+        if scheduled and contest_time.student_phase(scheduled, self._student(cid)) != "running":
             return self._contest_status(scheduled, cid)
         """考生须知：整页就是**考区官方通告的原文**（`config.NOTICE_DOC` 那份 Markdown）。
 
@@ -574,7 +623,7 @@ class StudentPages:
         tree_name = name if name and name != "?" else ""
         # 本场应提交的个人信息文件名（不知道姓名时只给个示意）
         person_name = f"{html.escape(name)}.txt" if name and name != "?" else "你的名字.txt"
-        score_text = "已公布" if exam.get("released") else "赛中不显示，赛后由老师公布"
+        score_text = "已公布" if exam.get("released") else "赛中不显示；" + _release_text(contest)
         nav = (self._nav(kaohao, cid, name=name) if kaohao else
                f'<p class="muted"><a href="/enter?c={urllib.parse.quote(cid)}">考试入口</a>'
                f' · <a href="/">首页</a> · <a href="/contests">我的比赛</a></p>')
@@ -612,7 +661,7 @@ class StudentPages:
 {self._rule_warn(kaohao or tree_kaohao, exam)}
 {self._person_card(name)}
 <p class="muted" style="margin-bottom:0">考试期间看不到任何判分信息（编译结果、测试点、
-分数都没有），成绩由老师在考试结束后统一公布 ——
+分数都没有），{html.escape(_release_text(contest))}。
 所以交之前自己核对一遍：<b>文件名、目录位置、freopen 的文件名</b>。
 考试页右上角和交卷回执都会帮你核对目录结构。</p>
 </div>"""
@@ -639,7 +688,7 @@ class StudentPages:
         if not contest:
             self._send(page("无法提交", self._flash("err", "比赛不存在。")), 400)
             return
-        if contest_time.phase(contest) != "running":
+        if contest_time.student_phase(contest, kaohao) != "running":
             self._contest_status(contest, cid, 403)
             return
         reserved = False
@@ -656,7 +705,7 @@ class StudentPages:
             reserved = True
             with store._LOCK:
                 current = store.get_contest(cid)
-                contest_time.require_running(current)
+                contest_time.require_student_running(current, kaohao)
                 if kaohao not in store.load_roster(cid):
                     raise ValueError("考号已失效，无法交卷。")
                 # Re-read configuration after receiving the upload, before committing it.
@@ -788,7 +837,7 @@ class StudentPages:
         me = self._student(cid) or kaohao_input.strip().upper()
         # 零反馈：老师公布成绩之前一律不给分数（三种赛制一视同仁）
         if contest_time.phase(contest) != "ended" or not exam.get("released"):
-            self._send(page("查成绩", self._flash("info", "成绩还没有公布，请等老师通知。") +
+            self._send(page("查成绩", self._flash("info", "成绩还没有公布，请等待全场统一开放。") +
                             f'<p><a class="btn" href="/hall?c={cid}">返回比赛</a></p>'))
             return
         out = [self._nav(me, cid, name=store.student_name(cid, me)) if me else "",

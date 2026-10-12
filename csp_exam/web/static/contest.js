@@ -155,10 +155,13 @@
         var response = await fetch(cfg.url, { cache: 'no-store', credentials: 'same-origin', signal: abort.signal });
         if (!response.ok) throw new Error('clock');
         var state = await response.json();
-        if (!['pending', 'unscheduled', 'running', 'ended'].includes(state.phase)
+        if (!['pending', 'unscheduled', 'ready', 'running', 'ended'].includes(state.phase)
             || !Number.isFinite(state.server_now) || !Number.isFinite(state.start_at)
             || !Number.isFinite(state.end_at)) throw new Error('clock');
         if (state.phase !== cfg.phase) { navigate(state.phase === 'running'); return; }
+        if (typeof state.scores_released === 'boolean' && state.scores_released !== cfg.scores_released) {
+          navigate(false); return;
+        }
         if (cfg.phase !== 'running' && (start !== state.start_at || end !== state.end_at)) {
           navigate(false); return; // 重排时间后同步更新候考页上的日期和时长。
         }
@@ -175,8 +178,7 @@
           }
         }
         start = state.start_at; end = state.end_at; now = state.server_now; anchor = performance.now();
-        if (note) note.textContent = cfg.phase === 'pending'
-          ? '你已进入候考区，开考后将自动进入考试。' : note.textContent;
+        // Preserve the waiting copy: flexible exams require a deliberate start.
         tick();
       } catch (e) {
         if (note) note.textContent = '暂时无法连接服务器，正在自动重试…';

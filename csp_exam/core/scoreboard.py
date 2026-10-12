@@ -23,6 +23,7 @@ def _signature(cid: str) -> tuple:
 def snapshot(cid: str, *, private: bool = False) -> dict:
     # 与成绩和公开开关的写入共用锁，避免一次投影混入两个版本。
     with store._LOCK:
+        store.maybe_auto_release(cid)
         contest = store.get_contest(cid)
         if not contest:
             return {"ok": False, "error": "比赛不存在"}

@@ -72,7 +72,18 @@ def legacy_documents(root):
 
 def _initialize(db, root):
     version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version == 2:
+        return
     if version == 1:
+        db.executescript("""
+          BEGIN IMMEDIATE;
+          CREATE TABLE IF NOT EXISTS exam_attempts(
+            contest_id TEXT NOT NULL, kaohao TEXT NOT NULL,
+            start_at REAL NOT NULL, end_at REAL NOT NULL CHECK(end_at>start_at),
+            PRIMARY KEY(contest_id,kaohao));
+          PRAGMA user_version=2;
+          COMMIT;
+        """)
         return
     if version != 0:
         raise OSError(f"不支持的题库数据库版本：{version}")
@@ -82,6 +93,7 @@ def _initialize(db, root):
       CREATE TABLE documents(key TEXT PRIMARY KEY, shape TEXT NOT NULL, header TEXT NOT NULL CHECK(json_valid(header)), updated_at REAL NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE records(document_key TEXT NOT NULL REFERENCES documents(key) ON DELETE CASCADE, item_key TEXT NOT NULL, position INTEGER NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)), PRIMARY KEY(document_key,item_key));
       CREATE TABLE statements(pid TEXT PRIMARY KEY, markdown TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, updated_at REAL NOT NULL);
+      CREATE TABLE exam_attempts(contest_id TEXT NOT NULL, kaohao TEXT NOT NULL, start_at REAL NOT NULL, end_at REAL NOT NULL CHECK(end_at>start_at), PRIMARY KEY(contest_id,kaohao));
       CREATE VIEW problem_library AS
         SELECT r.item_key AS id, json_extract(r.payload,'$.title') AS title,
           coalesce(s.markdown,'') AS description,
@@ -99,7 +111,7 @@ def _initialize(db, root):
         for path in sorted((Path(root) / "statements").glob("*.md")):
             db.execute("INSERT INTO statements(pid,markdown,updated_at) VALUES(?,?,?)",
                        (path.stem, path.read_text(encoding="utf-8"), time.time()))
-        db.execute("PRAGMA user_version=1")
+        db.execute("PRAGMA user_version=2")
         db.commit()
     except Exception:
         db.rollback()

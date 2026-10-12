@@ -87,10 +87,13 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         if context:
             cid, state = context
             # Poll only public timing fields. Hide stale exam content at the server deadline.
-            start, end = contest_time.window(store.get_contest(cid))
+            start, end = contest_time.student_window(store.get_contest(cid), self._student(cid))
+            contest = store.get_contest(cid)
             cfg = json.dumps({"url": "/api/contest-state?c=" + urllib.parse.quote(cid), "phase": state,
                               "hall_url": "/hall?c=" + urllib.parse.quote(cid), "start_at": start,
-                              "end_at": end, "server_now": time.time()}).replace("<", "\\u003c")
+                              "end_at": end, "server_now": time.time(),
+                              **({"scores_released": contest_time.phase(contest) == "ended" and bool(store.load_exam(cid).get("released"))}
+                                 if contest_time.flexible(contest) else {})}).replace("<", "\\u003c")
             script = ("<script>window.initContestWindow(" + cfg + ");</script>").encode("utf-8")
             body = body.replace(b"</body>", script + b"</body>")
         self.send_response(status)
@@ -296,13 +299,21 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         q = self._query()
         path = urllib.parse.urlparse(self.path).path
 
+        if q.get("c"):
+            store.maybe_auto_release(q["c"])
+
         if path == "/api/contest-state":
             c = store.get_contest(q.get("c", ""))
             if not c:
                 return self._json({"error": "比赛不存在"}, 404)
-            start, end = contest_time.window(c)
-            return self._json({"phase": contest_time.phase(c), "server_now": time.time(),
-                               "start_at": start, "end_at": end})
+            kaohao = self._student(c["id"])
+            if kaohao not in store.load_roster(c["id"]):
+                kaohao = ""
+            start, end = contest_time.student_window(c, kaohao)
+            return self._json({"phase": contest_time.student_phase(c, kaohao), "server_now": time.time(),
+                               "start_at": start, "end_at": end,
+                               **({"scores_released": contest_time.phase(c) == "ended" and bool(store.load_exam(c["id"]).get("released"))}
+                                  if contest_time.flexible(c) else {})})
         if path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -481,9 +492,10 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
                     f'<a class="btn btn-gray" href="/help?c={urllib.parse.quote(cid)}">考生须知</a></p>'),
                     403)
                 return
-            state = contest_time.phase(contest)
+            state = contest_time.student_phase(contest, kaohao)
             self._contest_clock = (cid, state)
             if state != "running" and not (state == "ended" and path in ("/score", "/file")
+                                            and contest_time.phase(contest) == "ended"
                                             and store.load_exam(cid).get("released")):
                 return self._contest_status(contest, cid, 200 if path == "/hall" else 403)
             if path == "/hall":
@@ -525,6 +537,9 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
             return route(self, self._query(), post=True)
         if path == "/enter":
             self._do_enter()
+            return
+        if path == "/start":
+            self._do_start()
             return
         if path == "/upload":
             self._do_upload()

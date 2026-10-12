@@ -1105,7 +1105,7 @@ class AdminPages:
 </div>
 {pagination}
 <p class="muted">「发布成绩」= 学生立刻能在自己的页面（我的比赛 / 查成绩）看到自己的分数。
- 所有赛制均在老师公布后可见；发布之后随时可以「收回成绩」。</p>
+ 统一开考场由老师公布，自主开考场全场结束且评测完成后自动开放；公布之后可以「收回成绩」。</p>
 <p class="muted">要加题目？在「<a href="{admin_url(key, path='/admin/problems')}">题目列表</a> ·
  <a href="{admin_url(key, path='/admin/problem')}">新建题目</a>」里选整个出题文件夹（或 zip），
  系统会自动识别题面、测试数据、标程与大样例。</p>
@@ -1114,25 +1114,39 @@ class AdminPages:
 
     def _schedule_fields(self, contest=None):
         from ..core import contest_time
+        from ..core import attempts
         start, end = contest_time.window(contest)
-        return (f'<div class="row" style="margin-top:12px"><span>开始时间（北京时间）</span>'
+        flexible = contest_time.flexible(contest)
+        locked = bool(contest and attempts.all_for(contest['id']))
+        return (f'<div data-schedule-fields data-locked="{int(locked)}">'
+                '<div class="row mt-3"><span>开考方式</span><select name="exam_mode">'
+                f'<option value="fixed"{" selected" if not flexible else ""}>统一开考</option>'
+                f'<option value="flexible"{" selected" if flexible else ""}>自主开考（每人独立计时）</option></select></div>'
+                f'<div class="row" style="margin-top:12px"><span data-start-label>开始时间（北京时间）</span>'
                 f'<input required type="datetime-local" step="1" name="start_at" '
                 f'value="{contest_time.input_value(start)}">'
-                f'<span>结束时间（北京时间）</span>'
+                f'<span data-end-label>结束时间（北京时间）</span>'
                 f'<input required type="datetime-local" step="1" name="end_at" '
                 f'value="{contest_time.input_value(end)}"></div>'
                 '<p class="muted">按服务器时间自动开赛、结束。开赛前仅显示标题；结束后隐藏题目并拒绝提交。'
-                '时长用于自动填写结束时间，也可直接修改结束时间。</p>'
-                '<script>(()=>{const s=document.currentScript.previousElementSibling.previousElementSibling;'
+                '时长用于自动填写结束时间，也可直接修改结束时间。</p></div>'
+                '<script>(()=>{const s=document.currentScript.previousElementSibling;'
                 'const a=s.querySelector("[name=start_at]"),b=s.querySelector("[name=end_at]");'
-                'const f=s.closest("form"),d=f.querySelector("[name=duration]");'
-                'const sync=()=>{if(!a.value||!d.value)return;const t=new Date(a.value+"+08:00");'
+                'const f=s.closest("form"),d=f.querySelector("[name=duration]"),m=s.querySelector("[name=exam_mode]");'
+                'const render=()=>{const flex=m.value==="flexible";'
+                's.querySelector("[data-start-label]").textContent=flex?"允许开考起点（北京时间）":"开始时间（北京时间）";'
+                's.querySelector("[data-end-label]").textContent=flex?"最后允许开考时间（北京时间）":"结束时间（北京时间）";'
+                's.querySelector("p").textContent=flex?"时长为每人的考试时长。开考时间段只限制首次开考；退出不暂停，晚开考也可获得完整时长。最后允许开考时间＋考试时长后，评测完成时统一自动开放成绩。":"按服务器时间自动开赛、结束。时长用于自动填写结束时间，也可直接修改结束时间。";'
+                'if(s.dataset.locked==="1"){a.readOnly=b.readOnly=d.readOnly=true;m.disabled=true;'
+                's.querySelector("p").textContent+=" 已有学生开考，时间设置已锁定；需要调整请新建比赛。";}};'
+                'const sync=()=>{if(m.value==="flexible"||s.dataset.locked==="1"||!a.value||!d.value)return;const t=new Date(a.value+"+08:00");'
                 'if(Number.isNaN(t.getTime()))return;'
                 'b.value=new Date(t.getTime()+Number(d.value)*60000+8*3600000).toISOString().slice(0,19);};'
                 'a.addEventListener("change",sync);d.addEventListener("input",sync);'
                 'const l=f.querySelector("[name=level]");if(l)l.addEventListener("change",()=>setTimeout(sync,0));'
-                'b.addEventListener("change",()=>{if(a.value&&b.value)d.value=Math.ceil('
-                '(new Date(b.value+"+08:00")-new Date(a.value+"+08:00"))/60000);});})();</script>')
+                'b.addEventListener("change",()=>{if(m.value==="fixed"&&a.value&&b.value)d.value=Math.ceil('
+                '(new Date(b.value+"+08:00")-new Date(a.value+"+08:00"))/60000);});'
+                'm.addEventListener("change",render);render();})();</script>')
 
     def _admin_new_page(self, q: dict):
         key = q.get("key", "")
@@ -1170,7 +1184,7 @@ class AdminPages:
 {self._schedule_fields()}
 <p class="muted" style="margin-top:10px">级别决定考号格式与默认时长：入门级
   <code>GD-J·····</code>、提高级 <code>GD-S·····</code>（5 位纯随机数，不是从 1 顺着排）。
-  学生交完只看到「已提交」，成绩由老师点「公布成绩」后才可见。</p>
+  学生交完只看到「已提交」；统一开考由老师公布成绩，自主开考在全场结束且评测完成后统一开放。</p>
 <ul class="muted">{rules_desc}</ul>
 <p class="muted">创建后进入本场管理，继续设置名单、考号前缀和比赛题目。</p>
 <p class="row" style="margin-top:10px"><button type="submit">创建比赛并继续设置</button>
@@ -1204,6 +1218,8 @@ class AdminPages:
         rule = store.rule_of(contest)
         roster = store.roster_detail(cid)
         results = store.load_results(cid)
+        from ..core import attempts
+        clocks = attempts.all_for(cid)
         problems = []
         try:
             problems = localoj.list_problems()
@@ -1212,12 +1228,17 @@ class AdminPages:
 
         rows = "".join(
             f'<tr><td>{html.escape(r["kaohao"])}</td><td>{html.escape(r["name"])}</td>'
-            f'<td>{"已提交" if r.get("submitted") else "—"}</td></tr>' for r in roster)
+            f'<td>{"已提交" if r.get("submitted") else "—"}</td>' + (
+            f'<td>{contest_time.display(clocks.get(r["kaohao"], {}).get("start_at")) if r["kaohao"] in clocks else "未开考"}</td>'
+            f'<td>{contest_time.display(clocks.get(r["kaohao"], {}).get("end_at")) if r["kaohao"] in clocks else "—"}</td>'
+            f'<td>{contest_time.LABELS[contest_time.student_phase(contest, r["kaohao"])]}</td>'
+            if contest_time.flexible(contest) else '') + '</tr>' for r in roster)
         roster_table = (
             f'<h3 style="font-size:15px;margin:20px 0 6px">本场名单（{len(roster)} 人）'
             f'<span class="muted"> 考号随机分配，发下去之前建议点开「考号表」核对</span></h3>'
             f'<div style="overflow:auto">'
-            f'<table><tr><th>考号</th><th>姓名</th><th>提交</th></tr>'
+            f'<table><tr><th>考号</th><th>姓名</th><th>提交</th>'
+            + ('<th>个人开考时间</th><th>个人截止时间</th><th>考试状态</th>' if contest_time.flexible(contest) else '') + '</tr>'
             f'{rows}</table></div>' if roster else
             '<p class="muted" style="margin-top:14px">本场还没有名单，用上面的分组或粘贴名单导入。</p>')
         group_options = "".join(
@@ -1252,8 +1273,8 @@ class AdminPages:
         pid_names_json = _js_json(pid_names)
         problems_json_attr = html.escape(json.dumps(probs_now, ensure_ascii=False), quote=True)
         # 改级别等于重发考号：有人提交过就锁住级别（沿用 reshuffle 的那个保护）
-        has_results = bool(results)
-        level_lock = (' disabled title="本场已经有人提交，改级别会让成绩对错人"'
+        has_results = bool(results) or bool(clocks)
+        level_lock = (' disabled title="本场已有提交或学生开考，级别已锁定"'
                       if has_results else "")
         level_now = store.level_of(contest)
         level_names = {"J": "入门级 J 组（考号 GD-J·····，3.5 小时）",
@@ -1299,8 +1320,8 @@ class AdminPages:
      style="width:70px;display:inline-block">
 </div>
 {self._schedule_fields(contest)}
-<p class="muted" style="margin-top:10px">{("本场已经有人提交，级别已锁住，要换级别请先删掉本场成绩"
-   "（或新建一场考试）。" if has_results else "改级别等于重发本场考号（考号里的 J/S 跟着级别走）。")}</p>
+<p class="muted" style="margin-top:10px">{("本场已有提交或学生开考，级别已锁定；要换级别请新建比赛。"
+   if has_results else "改级别等于重发本场考号（考号里的 J/S 跟着级别走）。")}</p>
 </div>
 
 <h2>2. 名单与考号（每场考试纯随机发号）</h2>
@@ -1333,7 +1354,7 @@ class AdminPages:
           onclick="return confirm('把本场 {len(roster)} 个考号全部重新随机分配？学生不变，考号全换。')">
     重新随机分配考号</button>
   <span class="muted">只在还没人提交时可用（免得成绩对错人）</span>
-</p>''' if roster and not results else ''}
+</p>''' if roster and not has_results else ''}
 </div>
 
 <h2>3. 本场题目</h2>
@@ -1675,7 +1696,7 @@ class AdminPages:
                 '代码里用 freopen 读写本题英文名对应的 <code>.in</code> / <code>.out</code>，'
                 '文件名与文件夹名严格区分大小写，<code>_</code> 与 <code>-</code> 不能混用',
                 f'本场<b>赛中不显示任何判分信息</b>：交完只显示「已提交」，'
-                f'成绩由老师在考试结束后公布']
+                f'全场考试结束后统一公布成绩']
         tip_html = "".join(f"<li>{t}</li>" for t in tips)
         body = f"""
     <p>{rule_badge(contest)} {level_badge(contest)}
@@ -1983,7 +2004,10 @@ class AdminPages:
             return
         if "released" in form:
             try:
-                store.set_released(cid, form["released"] == "1")
+                with store._LOCK:
+                    store.set_released(cid, form["released"] == "1")
+                    if contest_time.flexible(contest):
+                        store.update_contest(cid, auto_release_paused=form["released"] != "1")
             except ValueError as e:
                 self._redirect(admin_url(q.get("key", ""), cid, str(e)))
                 return
@@ -2012,6 +2036,11 @@ class AdminPages:
         self._redirect(admin_url(key, cid, "保存结果：" + tip))
 
     def _apply_settings(self, cid: str, contest: dict, form: dict) -> str:
+        from ..core import database
+        with store._LOCK, database.transaction(store.DATA_DIR):
+            return self._apply_settings_locked(cid, store.get_contest(cid), form)
+
+    def _apply_settings_locked(self, cid: str, contest: dict, form: dict) -> str:
         """保存「本场设置」：级别、时长、考号前缀。返回一句结果说明。
 
         **级别**决定考号里的 J/S 字母：改级别等于重发本场考号（原型上就是这么写的），
@@ -2022,7 +2051,7 @@ class AdminPages:
         没提交 `level`（页面上被人提交过时会 disabled，浏览器就不发这个字段）时保持原级别。
         """
         from ..core.contest_time import parse_schedule
-        schedule = parse_schedule(form, contest) if "start_at" in form or "end_at" in form else None
+        schedule = parse_schedule(form, contest) if any(k in form for k in ("start_at", "end_at", "exam_mode")) else None
         if (form.get("prefix") or "").strip():
             store.normalize_prefix(form["prefix"])
         notes = []
@@ -2031,7 +2060,8 @@ class AdminPages:
         if level not in store.LEVEL_MINUTES:
             level = old_level
         if level != old_level:
-            if store.load_results(cid):
+            from ..core import attempts
+            if store.load_results(cid) or attempts.all_for(cid):
                 notes.append("本场已有提交，级别修改已拒绝；其余设置继续保存。要换级别请新建比赛。")
                 level = old_level
         if level != old_level:
@@ -2054,7 +2084,7 @@ class AdminPages:
         elif duration > 0:
             start, _ = contest_time.window(contest)
             if start:
-                end = start + duration * 60
+                end = contest_time.window(contest)[1] if contest_time.flexible(contest) else start + duration * 60
                 if not contest_time.timestamp(end):
                     raise ValueError("比赛时长超出有效时间范围。")
                 store.update_contest(cid, duration_min=duration, end_at=end)

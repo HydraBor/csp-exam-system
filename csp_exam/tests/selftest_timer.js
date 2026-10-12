@@ -26,8 +26,8 @@ assert.equal(el.textContent, '00:01:30'); assert.equal(active.size, 1);
 console.log('Passed: client clock change, final fractional second, deadline, extension, single timer.');
 
 async function windowTests() {
-  function setup() {
-    let clock = 0, payload = {phase:'pending',start_at:1700000010,end_at:1700000100,server_now:1700000000};
+  function setup(initial = {}) {
+    let clock = 0, payload = {phase:'pending',start_at:1700000010,end_at:1700000100,server_now:1700000000,...initial};
     const nodes = {'wait-countdown':{textContent:''}, 'wait-status':{textContent:''}};
     const timers = [], navigation = [], body = {cleared:false,replaceChildren(){this.cleared=true;}};
     let fail = false, calls = 0;
@@ -64,6 +64,13 @@ async function windowTests() {
   assert.deepEqual(outage.navigation,[]);assert.match(outage.nodes['wait-status'].textContent,/自动重试/);
   outage.time(12000);outage.offline(false);outage.state({phase:'running',server_now:1700000012});await outage.poll();
   assert.deepEqual(outage.navigation,['/hall?c=test']);
+  const flexible=setup({scores_released:false});await new Promise(setImmediate);
+  flexible.time(10000);flexible.state({phase:'ready',server_now:1700000010});await flexible.poll();
+  assert.deepEqual(flexible.navigation,['reload']); // Show the start button; never start on GET/poll.
+  const published=setup({phase:'ended',scores_released:false});await new Promise(setImmediate);
+  published.time(2000);published.state({scores_released:true});await published.poll();
+  assert.deepEqual(published.navigation,['reload']); // The ended page gains the result links automatically.
   console.log('Passed: server start confirmation, incorrect client clock, reschedule, offline retry, single navigation.');
+  console.log('Passed: flexible opening requires a manual start, automatic score publication refreshes the ended page.');
 }
 windowTests().catch(error=>{console.error(error);process.exitCode=1;});

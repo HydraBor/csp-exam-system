@@ -69,19 +69,19 @@ RULES = {
         "key": "OI", "name": "OI 赛制",
         "best_of": False, "freopen": False,
         "desc": "国内 OI/NOIP 风格：程序用**标准输入输出**（cin/cout，不需要 freopen），"
-                "成绩按**最后一次**提交计分，老师在管理端点「发布成绩」后学生才能看到分数。",
+                "成绩按**最后一次**提交计分，全场考试结束且成绩公布后可查看分数。",
     },
     "IOI": {
         "key": "IOI", "name": "IOI 赛制",
         "best_of": True, "freopen": False,
         "desc": "国际信息学奥赛风格：程序用**标准输入输出**，"
-                "每题取多次提交的**最高分**；成绩同样等老师公布后才可见。",
+                "每题取多次提交的**最高分**；成绩同样在全场考试结束且公布后可见。",
     },
     "CSP": {
         "key": "CSP", "name": "CSP 赛制",
         "best_of": False, "freopen": True,
         "desc": "CSP-J/S 复赛风格：代码必须用 freopen 读写 `<题目英文名>.in` / `<题目英文名>.out`；"
-                "文件夹名或 freopen 文件名写错，这题就是 0 分。赛后老师公布成绩。",
+                "文件夹名或 freopen 文件名写错，这题就是 0 分。全场结束后统一公布成绩。",
     },
 }
 DEFAULT_RULE = "CSP"
@@ -374,15 +374,17 @@ def default_contest_id() -> str:
 
 def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_PREFIX,
                    level: str = DEFAULT_LEVEL, duration_min: int | None = None,
-                   start_at=None, end_at=None) -> dict:
+                   start_at=None, end_at=None, exam_mode="fixed") -> dict:
     """新建一场比赛。
 
     level         —— 级别 `J` 入门级 / `S` 提高级，决定考号字母与默认时长
     duration_min  —— 比赛时长（分钟），不填按级别取默认（J 210 / S 240）
 
-    没有「反馈模式」参数：所有比赛一律赛中零反馈，老师点「公布成绩」后才对学生可见。
+    赛中零反馈；统一开考由教师公布成绩，自主开考在全场结束且评测完成后统一开放。
     """
     prefix = normalize_prefix(prefix)
+    if exam_mode not in ("fixed", "flexible"):
+        raise ValueError("考试模式无效。")
     with _LOCK:
         items = list_contests()
         n = 1
@@ -397,12 +399,14 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
             "rule": rule if rule in RULES else DEFAULT_RULE,
             "open": True, "released": False, "prefix": prefix,
             "level": lv,
+            "exam_mode": exam_mode,
             "duration_min": int(duration_min or LEVEL_MINUTES[lv]),
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         if start_at is not None or end_at is not None:
             from .contest_time import parse_schedule
-            contest.update(parse_schedule({"start_at": start_at, "end_at": end_at}))
+            contest.update(parse_schedule({"start_at": start_at, "end_at": end_at,
+                                           "exam_mode": exam_mode, "duration": contest["duration_min"]}))
         items.append(contest)
         save_contests(items)
         _save(_cp(contest["id"], "exam.json"), {"title": contest["title"], "notice": "",
@@ -417,7 +421,10 @@ def update_contest(cid: str, **fields) -> dict | None:
         items = list_contests()
         for c in items:
             if c.get("id") == cid:
-                if any(k in fields and fields[k] != c.get(k) for k in ("start_at", "end_at")):
+                from .contest_time import validate_change
+                validate_change(c, fields)
+                if any(k in fields and fields[k] != c.get(k, "fixed" if k == "exam_mode" else None)
+                       for k in ("start_at", "end_at", "duration_min", "exam_mode")):
                     exam = dict(load_exam(cid), released=False)
                     _save(_cp(cid, "exam.json"), exam)
                     fields["released"] = False
@@ -441,8 +448,9 @@ def delete_contest(cid: str) -> bool:
         if len(keep) == len(items):
             return False
         from .contest_time import phase
+        from . import attempts
         contest = next(c for c in items if c.get("id") == cid)
-        if phase(contest) == "running":
+        if phase(contest) == "running" or any(time.time() < a["end_at"] for a in attempts.all_for(cid).values()):
             raise ValueError("比赛正在进行，不能删除。")
         if any(r.get("judging") or r.get("submission_state") in ("queued", "judging")
                for r in load_results(cid).values()):
@@ -450,6 +458,8 @@ def delete_contest(cid: str) -> bool:
         save_contests(keep)
         from . import database
         database.delete(DATA_DIR, "contests/" + cid)
+        from . import attempts
+        attempts.delete_contest(cid)
         shutil.rmtree(os.path.join(DATA_DIR, "contests", cid), ignore_errors=True)
         return True
 
@@ -577,6 +587,11 @@ def load_roster(cid: str) -> dict[str, dict]:
 
 def save_roster(cid: str, mapping: dict[str, dict]) -> None:
     with _LOCK:
+        from . import attempts
+        previous = load_roster(cid)
+        for kh in attempts.all_for(cid):
+            if mapping.get(kh) != previous.get(kh):
+                raise ValueError("已有学生开考，不能删除或重新分配其考号；可以追加新考生。")
         _save(_cp(cid, "roster.json"), {k: mapping[k] for k in sorted(mapping)})
 
 
@@ -694,8 +709,9 @@ def replace_roster(cid: str, names: list[str], prefix: str | None = None,
                    level: str | None = None, width: int = DEFAULT_WIDTH) -> dict[str, dict]:
     """用这批姓名**重建**本场名单，并重新生成考号（整场重排）。"""
     with _LOCK:
-        if load_results(cid):
-            raise ValueError("本场已有提交，不能重建名单或重排考号；请新建比赛。")
+        from . import attempts
+        if load_results(cid) or attempts.all_for(cid):
+            raise ValueError("本场已有提交或学生开考，不能重建名单或重排考号；请新建比赛。")
         contest = get_contest(cid) or {}
         prefix = prefix or contest.get("prefix") or DEFAULT_PREFIX
         level = level or level_of(contest)
@@ -850,6 +866,24 @@ def set_released(cid: str, released: bool) -> None:
         exam["released"] = bool(released)
         save_exam(cid, exam)
         update_contest(cid, released=bool(released))
+
+
+def maybe_auto_release(cid: str) -> None:
+    """Flexible exams open results together only after the last possible deadline.
+
+    The existing publication checks still reject queued/failed/stale judgements.
+    An explicit teacher withdrawal stays withdrawn until the teacher republishes.
+    """
+    from .contest_time import flexible, phase
+    with _LOCK:
+        contest = get_contest(cid)
+        if (not flexible(contest) or phase(contest) != "ended" or
+                contest.get("auto_release_paused") or load_exam(cid).get("released")):
+            return
+        try:
+            set_released(cid, True)
+        except ValueError:
+            return
 
 
 def invalidate_problem_results(pid: str, reason: str) -> None:

@@ -341,7 +341,7 @@ def timer_bar(deadline_ts, duration_min=0, note: str = "",
     服务器的偏移，再只走本地秒差（脚本见 static/contest.js）。
     """
     try:
-        end = int(float(deadline_ts))
+        end = float(deadline_ts)
     except (TypeError, ValueError):
         end = 0
     if note:
@@ -352,7 +352,7 @@ def timer_bar(deadline_ts, duration_min=0, note: str = "",
         tip = "最后 30 分钟计时条会变红"
 
     if end > 0:
-        now = int(time.time())
+        now = time.time()
         shown = _hms(end - now)                      # 初始值服务端算好，脚本没跑也显示对
         attrs = (f' data-deadline="{end}" data-server-now="{now}"'
                  f' data-over-note="{html.escape(TIMER_OVER_NOTE, quote=True)}"')
