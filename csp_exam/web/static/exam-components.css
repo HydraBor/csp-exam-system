@@ -417,3 +417,39 @@ tr.row-busy { opacity: .4; pointer-events: none; }
 
 /* 题面里的显示公式块（`$$ … $$`）：整块一个元素，公式太长时横向滚动，别把卡片撑破 */
 .math-block { overflow-x: auto; overflow-y: hidden; }
+
+/* Tabler datagrid: quiet labels, readable values, reflow at narrow widths. */
+.problem-heading { margin-bottom: 1rem; }
+.problem-heading .problem-contest-context { margin: 0 0 1rem; }
+.problem-heading .problem-title {
+  margin: 0 !important;
+  font-size: 1.375rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.problem-limit-grid {
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  max-width: 34rem;
+  gap: 1rem 1.5rem;
+  margin: 1rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--tblr-border-color, #e2e8f0);
+}
+.problem-limit-grid .datagrid-item { min-width: 0; }
+.problem-limit-grid .datagrid-title { font-weight: 400; }
+.problem-limit-grid .datagrid-content {
+  margin: .25rem 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.problem-list-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .125rem .75rem;
+  margin-top: .375rem;
+  font-size: .8125rem;
+  line-height: 1.5;
+}
+.problem-list-limits span { white-space: nowrap; }

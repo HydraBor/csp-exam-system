@@ -31,7 +31,7 @@ import html
 import hashlib
 import json
 
-from ..core import grading, localoj, store, wrapper, submissions
+from ..core import grading, judgelocal, localoj, store, wrapper, submissions
 from ..core import contest_time
 from ..core.security import make_cookie
 from ..core import problems as make_problem
@@ -67,6 +67,20 @@ def _dur_text(minutes) -> str:
     if h:
         return f"{h} 小时"
     return f"{m} 分钟"
+
+
+def _problem_limits(pid: str) -> tuple[int | None, int | None]:
+    """Use the judge's authoritative limits; never invent missing values."""
+    try:
+        return judgelocal.limits_of(pid)
+    except ValueError:
+        return None, None
+
+
+def _limit_labels(limits: tuple[int | None, int | None]) -> tuple[str, str]:
+    ms, mib = limits
+    return (f"{ms / 1000:g} 秒" if ms is not None else "未配置",
+            f"{mib} MiB" if mib is not None else "未配置")
 
 
 class StudentPages:
@@ -320,7 +334,7 @@ class StudentPages:
         self._send(page(contest["title"], "".join(body)))
 
     def _hall_problems(self, exam: dict, contest: dict, cid: str) -> str:
-        """本场题目表：题号 / **英文名** / 题目 / [你要读写的文件] / 大样例 / 满分。
+        """本场题目表，题名下显示时限/内存；不增加拥挤的表格列。
 
         英文名列用 `store.code_of`（老师配题时填的，学生拿它当文件夹名和源文件名，
         如 `candy`），文件列只在需要 freopen 的赛制下出现（`<英文名>.in / <英文名>.out`）。
@@ -343,6 +357,9 @@ class StudentPages:
                         f'{html.escape(title) or "查看题面"}</a>')
             else:
                 link = html.escape(title)
+            time_label, memory_label = _limit_labels(_problem_limits(str(p.get("pid") or "")))
+            link += ('<div class="problem-list-limits text-secondary" aria-label="题目资源限制">'
+                     f'<span>时限 {time_label}</span><span>内存 {memory_label}</span></div>')
             cells = [f'第 {p["no"]} 题', f'<b>{html.escape(code)}</b>', link]
             if show_files:
                 cells.append(f'{html.escape(code)}.in / {html.escape(code)}.out')
@@ -964,6 +981,8 @@ class StudentPages:
         pid = str(prob.get("pid") or "")
         slug = store.code_of(prob)
         full = int(prob.get("full", 100))
+        limits = _problem_limits(pid)
+        time_label, memory_label = _limit_labels(limits)
         cache_dir = os.path.join(store.DATA_DIR, "statements")
         try:
             text = localoj.problem_statement(pid, cache_dir)
@@ -973,12 +992,23 @@ class StudentPages:
         nav = self._nav(kaohao, cid, name=store.student_name(cid, kaohao),
                         extra=(f'<a href="/sample?c={cid}&p={prob["no"]}">下载大样例</a>'
                                if has_samples(pid) else ""))
-        head = (f'<div class="problem-heading"><p>{rule_badge(contest)} {level_badge(contest)}'
+        head = (f'<div class="problem-heading card card-body">'
+                f'<p class="problem-contest-context text-secondary">{rule_badge(contest)} {level_badge(contest)}'
                 f' <b>{html.escape(contest["title"])}</b></p>'
-                f'<h2>第 {prob["no"]} 题 · {html.escape(slug)}'
-                f'<span class="muted"> {html.escape(str(prob.get("title") or ""))}'
-                f' · 满分 {full}</span></h2></div>')
-        revision = hashlib.sha256((text + json.dumps(prob, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
+                '<div class="d-flex flex-wrap align-items-center gap-2">'
+                f'<span class="badge bg-blue-lt">第 {prob["no"]} 题</span>'
+                f'<h2 class="problem-title">{html.escape(str(prob.get("title") or slug))}</h2>'
+                f'<span class="badge bg-secondary-lt font-monospace">{html.escape(slug)}</span></div>'
+                '<dl class="datagrid problem-limit-grid" aria-label="题目资源限制">'
+                f'<div class="datagrid-item"><dt class="datagrid-title">时间限制</dt>'
+                f'<dd class="datagrid-content">{time_label}</dd></div>'
+                f'<div class="datagrid-item"><dt class="datagrid-title">内存限制</dt>'
+                f'<dd class="datagrid-content">{memory_label}</dd></div>'
+                f'<div class="datagrid-item"><dt class="datagrid-title">满分</dt>'
+                f'<dd class="datagrid-content">{full} 分</dd></div></dl></div>')
+        revision = hashlib.sha256(json.dumps(
+            {"statement": text, "problem": prob, "limits": limits},
+            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         if not text.strip():
             body = (nav + head + self._flash("err", "这道题还没有题面（老师还没写/还没同步过来）。"))
         else:
@@ -1000,7 +1030,7 @@ class StudentPages:
       current.dataset.version = incoming.dataset.version;
       var heading = document.querySelector('.problem-heading');
       var newHeading = next.querySelector('.problem-heading');
-      if (heading && newHeading) heading.innerHTML = newHeading.innerHTML;
+      if (heading && newHeading) heading.replaceWith(newHeading);
       document.title = next.title;
       if (window.renderMathInElement) renderMathInElement(current, {
         delimiters: [{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],
