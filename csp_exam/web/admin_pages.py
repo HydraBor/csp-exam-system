@@ -2459,9 +2459,7 @@ window.addEventListener('hashchange',openLinkedSource);
         code = r["code"]
         cases_cell = str(r["cases"]) if r["cases"] else '<span class="muted">—</span>'
         if r["time_ms"] and r["memory_mb"]:
-            tl_text = (f"{r['time_ms'] / 1000:g} 秒 / {r['memory_mb']} MB"
-                       if r["time_ms"] % 1000 == 0 else
-                       f"{r['time_ms']} 毫秒 / {r['memory_mb']} MB")
+            tl_text = f"{r['time_ms'] / 1000:g} 秒 / {r['memory_mb']} MB"
             tl_hover = ""
         else:
             # 这一格以前写「—（没记下，自己测试时看用时）」，太长把表格顶宽了；
@@ -3055,7 +3053,7 @@ window.addEventListener('hashchange',openLinkedSource);
         tail = ""
         if time_ms:
             pct = round(slowest / time_ms * 100) if slowest else 0
-            tail = (f'最慢的点 {slowest}ms（时限 {time_ms}ms，占 {pct}%），'
+            tail = (f'最慢的点 {slowest}ms（时限 {time_ms / 1000:g} 秒，占 {pct}%），'
                     f'峰值内存 {_fmt_kb(peak_kb)}。')
             if pct > 50:
                 tail += ('<br><span class="warn">注意：最慢的点已经用掉一半以上时限，'

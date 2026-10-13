@@ -20,8 +20,8 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/csp-exam /var/log/csp-exam
 CPUQuota=50%
-MemoryHigh=256M
-MemoryMax=512M
+MemoryHigh=512M
+MemoryMax=768M
 TasksMax=256
 OOMScoreAdjust=500
 
