@@ -11,6 +11,8 @@ import threading
 import unittest
 from unittest.mock import patch
 import zipfile
+import urllib.parse
+from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from csp_exam.core import importer, judgelocal, localoj, problems, security, store
@@ -61,6 +63,83 @@ class ExportTests(unittest.TestCase):
         build_zip(target, [self.pid])
         with zipfile.ZipFile(target) as z:
             return {n: z.read(n) for n in z.namelist()}
+
+    @contextmanager
+    def http_server(self):
+        with patch.object(Handler, "log_message", lambda *a: None):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            server.daemon_threads = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            def request(pids, cookie=None, method="POST"):
+                cookie = security.ADMIN_COOKIE + "=" + security.make_admin_cookie() if cookie is None else cookie
+                body = urllib.parse.urlencode({"pids": pids})
+                path = "/admin/problem-export" + ("?" + body if method == "GET" else "")
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=20)
+                conn.request(method, path, body if method == "POST" else None,
+                             {"Cookie": cookie, "Content-Type": "application/x-www-form-urlencoded"})
+                r = conn.getresponse(); result = r.status, dict(r.getheaders()), r.read()
+                conn.close(); return result
+            try:
+                yield request
+            finally:
+                server.shutdown(); server.server_close(); thread.join()
+
+    def test_batch_http_roundtrip_each_folder_is_a_complete_problem(self):
+        other = "Q-02"
+        got = problems.create_problem(other, "第二题", {"1.in": b"7\n", "1.out": b"7\n"},
+                                      statement="## 题目描述\n\n另一个题面。", name="second",
+                                      std_source="int main(){}", time_ms=2500, memory_mb=256)
+        self.assertTrue(got["ok"], got)
+        original_other = judgelocal.cases_of(other)
+        with self.http_server() as request:
+            # The batch allowance is independent of the single-problem upload limit.
+            with patch("csp_exam.web.problem_export.MAX_PS_UPLOAD", 4096):
+                status, headers, data = request(other + "," + self.pid + "," + other)
+            self.assertEqual(status, 200)
+            self.assertIn("csp-problems-2.zip", headers["Content-Disposition"])
+            self.assertEqual(len(data), int(headers["Content-Length"]))
+            self.assertIn("no-store", headers["Cache-Control"])
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            files = {n: z.read(n) for n in z.namelist()}
+        self.assertEqual({n.split('/')[0] for n in files}, {self.pid, other, "library-manifest.json"})
+        self.assertEqual(json.loads(files["library-manifest.json"])["sha256"],
+                         {n: hashlib.sha256(b).hexdigest() for n,b in files.items() if n != "library-manifest.json"})
+        with patch.object(store, "DATA_DIR", str(self.root / "batch-dest")), patch.object(judgelocal, "PROBLEMS_DIR", str(self.root / "batch-dest/problems")):
+            for pid in (self.pid, other):
+                separate = {n[len(pid)+1:]: b for n,b in files.items() if n.startswith(pid+'/')}
+                imported = problems.create_problem("", "", separate)
+                self.assertTrue(imported["ok"], imported)
+            self.assertEqual(judgelocal.cases_of(self.pid), self.original)
+            self.assertEqual(judgelocal.cases_of(other), original_other)
+            self.assertEqual(problems.load_samples(self.pid)["items"], self.items)
+            self.assertEqual(problems.name_of_pid(other), "second")
+            self.assertEqual(judgelocal.limits_of(other), (2500, 256))
+            self.assertEqual(problems.load_problem_info()[other]["std"], "int main(){}")
+            self.assertEqual(localoj.problem_statement(other), "## 题目描述\n\n另一个题面。")
+            self.assertEqual(len(judgelocal.cases_of(self.pid)), 4)  # Samples remain non-scoring.
+
+    def test_batch_auth_invalid_selection_limits_and_deleted(self):
+        from csp_exam.web.problem_export import _SLOT
+        with self.http_server() as request:
+            for cookie in ("", "csp=" + security.make_cookie("c1", "student")):
+                self.assertEqual(request(self.pid, cookie=cookie)[0], 403)
+            for pids in ("", "../x", self.pid + ",", "unknown", ",".join("Q"+str(i) for i in range(501)), "X"*33000):
+                self.assertEqual(request(pids)[0], 400, pids[:80])
+            with _SLOT:
+                self.assertEqual(request(self.pid)[0], 429)
+            with patch("csp_exam.web.problem_export.MAX_LIBRARY_EXPORT", 4100):
+                self.assertEqual(request(self.pid)[0], 400)
+            self.assertEqual(request(self.pid, method="GET")[0], 200)
+            problems.set_deleted(self.pid)
+            self.assertEqual(request(self.pid)[0], 400)
+
+    def test_batch_build_failure_releases_download_slot(self):
+        with self.http_server() as request:
+            with patch("csp_exam.web.problem_export.build_zip", side_effect=OSError("disk error")):
+                status, _, body = request(self.pid)
+            self.assertEqual(status, 400); self.assertIn(b"disk error", body)
+            self.assertEqual(request(self.pid)[0], 200)
 
     def test_different_machine_keeps_all_problem_content(self):
         files = self.package()

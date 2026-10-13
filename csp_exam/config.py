@@ -44,6 +44,7 @@ STUDENT_COOKIE = "csp"
 #: 上传上限
 MAX_UPLOAD = 32 * 1024 * 1024         # 学生提交：32MB
 MAX_PS_UPLOAD = int(os.environ.get('CSP_MAX_PS_UPLOAD_MB', '64')) * 1024 * 1024
+MAX_LIBRARY_EXPORT = int(os.environ.get('CSP_MAX_EXPORT_MB', '512')) * 1024 * 1024
 MAX_UPLOAD_FILES = 1024
 MAX_SOURCE_BYTES = 100 * 1024        # CSP 官方源文件上限
 MAX_STUDENT_ARCHIVE = 256 * 1024 * 1024

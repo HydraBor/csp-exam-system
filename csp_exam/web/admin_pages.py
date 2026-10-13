@@ -561,7 +561,7 @@ PROBLEMS_JS = """<script>
       return '把题目 ' + t + '（' + pid + '）放回「全部题目」？';
     },
     'purge': function (t, pid) {
-      return '彻底删除 ' + pid + '？\\n题目数据、题目编号、题面缓存、大样例都会一起删掉，'
+      return '彻底删除 ' + t + '（' + pid + '）？\\n题目数据、题目编号、题面缓存、大样例都会一起删掉，'
            + '删了就找不回来了；历史提交记录里这道题会显示为已删除。';
     }
   };
@@ -569,16 +569,38 @@ PROBLEMS_JS = """<script>
   function probFlash(text, kind) {
     var box = $('prob-flash');
     if (!box) return;
-    box.innerHTML = text
-      ? '<div class="flash flash-' + (kind || 'ok') + '">' + text + '</div>' : '';
+    box.replaceChildren();
+    if (text) {
+      var notice = document.createElement('div');
+      notice.className = 'alert alert-' + (kind === 'err' ? 'danger' : 'success');
+      notice.setAttribute('role', 'status');
+      notice.textContent = text;
+      box.appendChild(notice);
+    }
   }
 
+  var pending = null, acting = false;
+  function askAct(btn, what) {
+    if (acting) return;
+    var attr = what === 'delete' ? 'data-del' : (what === 'restore' ? 'data-restore' : 'data-purge');
+    var pid = btn.getAttribute(attr) || '';
+    if (!pid || !ACT_ASK[what]) return;
+    pending = {button: btn, action: what};
+    $('prob-action-message').textContent = ACT_ASK[what](btn.getAttribute('data-title') || pid, pid);
+    var accept = $('prob-action-confirm');
+    accept.textContent = what === 'purge' ? '彻底删除' : (what === 'restore' ? '恢复题目' : '移入回收区');
+    accept.className = 'btn ' + (what === 'restore' ? 'btn-primary' : 'btn-danger');
+    window.openModal('prob-action-modal');
+    $('prob-action-modal').querySelector('[data-modal-close]').focus();
+  }
   function probAct(btn, what) {
     var attr = what === 'delete' ? 'data-del' : (what === 'restore' ? 'data-restore' : 'data-purge');
     var pid = btn.getAttribute(attr) || '';
-    var title = btn.getAttribute('data-title') || pid;
     if (!pid || !ACT_ASK[what]) return;
-    if (!confirm(ACT_ASK[what](title, pid))) return;
+    if (acting) return;
+    acting = true;
+    btn.disabled = true;
+    probFlash('正在' + (what === 'purge' ? '彻底删除' : what === 'restore' ? '恢复' : '删除') + '题目…');
     var tr = btn.closest ? btn.closest('tr') : null;
     if (tr) tr.classList.add('row-busy');            /* 先灰掉，别让人以为没点上 */
     var url = '/admin/problem' + (window.CSP_KEY_QUERY || '');
@@ -607,7 +629,8 @@ PROBLEMS_JS = """<script>
       .catch(function (e) {
         if (tr) tr.classList.remove('row-busy');
         probFlash('操作失败：' + e, 'err');
-      });
+      })
+      .finally(function () { acting = false; btn.disabled = false; });
   }
 
   /* 事件委托：表格被整块换掉以后，新行里的按钮照样点得动 */
@@ -616,8 +639,15 @@ PROBLEMS_JS = """<script>
       ? e.target.closest('[data-del],[data-restore],[data-purge]') : null;
     if (!btn) return;
     e.preventDefault();
-    probAct(btn, btn.hasAttribute('data-del') ? 'delete'
+    askAct(btn, btn.hasAttribute('data-del') ? 'delete'
               : (btn.hasAttribute('data-restore') ? 'restore' : 'purge'));
+  });
+  var acceptAction = $('prob-action-confirm');
+  if (acceptAction) acceptAction.addEventListener('click', function () {
+    if (!pending) return;
+    var chosen = pending; pending = null;
+    window.closeModal('prob-action-modal');
+    probAct(chosen.button, chosen.action);
   });
 
   /* ---------------- 自己测试 ---------------- */
@@ -2482,7 +2512,9 @@ window.addEventListener('hashchange',openLinkedSource);
                f'<button type="button" class="btn btn-sm btn-danger" data-del="{esc(pid)}" '
                f'data-title="{esc(title_txt or pid)}">删除</button>'
                f'</div>')
-        return (f'<tr><td><b>{html.escape(code) if code else "—"}</b></td>'
+        return (f'<tr><td class="w-1"><input type="checkbox" class="form-check-input" '
+                f'data-export-pid="{esc(pid)}" aria-label="选中 {esc(code)} {esc(title_txt)}"></td>'
+                f'<td><b>{html.escape(code) if code else "—"}</b></td>'
                 f'<td title="{esc(r["name"])}"><code>{html.escape(r["name"])}</code></td>'
                 f'<td title="{esc(hover)}"><div class="text-wrap" style="min-width:150px;max-width:260px">'
                 f'{html.escape(title_txt)}</div>{use_note}</td>'
@@ -2496,7 +2528,7 @@ window.addEventListener('hashchange',openLinkedSource);
         esc = lambda s: html.escape(str(s), quote=True)             # noqa: E731
         ops = (f'<div class="prob-ops">'
                f'<a class="btn btn-sm btn-gray" href="{problem_detail_url(key, g["pid"])}">查看题面</a>'
-               f'<button type="button" class="btn btn-sm" data-restore="{esc(g["pid"])}">恢复</button>'
+               f'<button type="button" class="btn btn-sm" data-restore="{esc(g["pid"])}" data-title="{esc(g["title"] or g["pid"])}">恢复</button>'
                f'<button type="button" class="btn btn-sm btn-danger" data-purge="{esc(g["pid"])}" '
                f'data-title="{esc(g["title"] or g["pid"])}">彻底删除</button>'
                f'</div>')
@@ -2574,22 +2606,30 @@ window.addEventListener('hashchange',openLinkedSource);
  老师只用它定位这道题；<b>英文名</b>是学生在比赛里看到的名字（加进比赛时可以按场次再改）。
  点「查看题面」进这道题的<b>详情页</b>（左边 Markdown 原文可以直接改，右边就是学生看到的样子，
  同一页还能看标程）；点「自己测试」拿代码跑一遍全部测试点，确认数据与时限设置没问题。
- 点「导出 ZIP」下载完整题包，可在另一台相同系统的「新建题目」直接上传；包含标程与答案，请妥善保存。
- 删除是**从列表里收起来**（题面、提交记录都留着），删完页面停在原地，不跳回顶部。</p>
+ 勾选题目后点「批量导出」，每题存入独立文件夹，再打包为一个 ZIP；也可以逐题「导出 ZIP」。
+ 题包含标程与答案，请妥善保存。删除会先移入下方回收区，可以恢复。</p>
 {"<p class='warn'>" + html.escape(err) + "（下面这份清单来自考试服务自己的记录）</p>" if err else ""}
 <p><a class="btn" href="{admin_url(key, path='/admin/problem')}">+ 新建题目</a>
    <button type="button" class="btn btn-gray" id="csp-refresh-cat">刷新题库清单</button>
    <span class="muted" id="csp-refresh-note"></span></p>
 
 <h2>全部题目（<span id="prob-live-count">{len(rows)}</span> 道）</h2>
-<div id="prob-flash"></div>
+<div id="prob-flash" aria-live="polite"></div>
+<form id="csp-export-form" method="post" action="{admin_url(key, path='/admin/problem-export')}"
+      class="d-flex align-items-center flex-wrap gap-3 mb-3">
+  <input type="hidden" id="csp-export-pids" name="pids" value="">
+  <button type="submit" class="btn btn-sm btn-primary" id="csp-export-selected" disabled>批量导出 ZIP</button>
+  <span class="text-secondary small" id="csp-export-count" aria-live="polite">已选 0 道</span>
+  <span class="text-secondary small">勾选左侧复选框；表头可全选。</span>
+</form>
 <div class="card table-responsive">
 <table class="table-nowrap">
-<tr><th>题目编号</th><th>英文名</th><th>标题</th>
+<tr><th class="w-1"><input type="checkbox" class="form-check-input" id="csp-export-all" aria-label="全选题目"></th>
+    <th>题目编号</th><th>英文名</th><th>标题</th>
     <th>测试点</th><th>时限 / 内存</th>
     <th>大样例</th><th>操作</th></tr>
 <tbody id="prob-rows">
-{"".join(table_rows) or '<tr><td colspan="7" class="muted">题库还是空的：点上面的「新建题目」，'
+{"".join(table_rows) or '<tr><td colspan="8" class="muted">题库还是空的：点上面的「新建题目」，'
                         '选整个出题文件夹（或 zip）就能自动识别建题。</td></tr>'}
 </tbody>
 </table>
@@ -2609,10 +2649,14 @@ window.addEventListener('hashchange',openLinkedSource);
 <p class="muted">「测试点 / 时限 / 内存」是建题时记下来的；更早建的题没有这份记录（显示「—」），
  跑一次「自己测试」就知道实际有多少个点、最慢的点占了多少时限。</p>
 {_test_modal()}
+{modal('prob-action-modal', '确认题库操作', '<p id="prob-action-message" style="white-space:pre-line"></p>'
+       '<div class="d-flex justify-content-end gap-2"><button type="button" class="btn btn-outline-secondary" data-modal-close>取消</button>'
+       '<button type="button" class="btn btn-danger" id="prob-action-confirm">确认</button></div>', close_label='关闭')}
 <script>window.CSP_CAND = {data};</script>
 <script>window.CSP_KEY_QUERY = {json.dumps(cid_query(key, ""))};</script>
 {_math_js()}
 {PROBLEMS_JS.replace("{scan_url}", "/admin/scan")}
+<script defer src="/static/problem-library.js"></script>
 <script>
 (function () {{
   var btn = document.getElementById('csp-refresh-cat');
@@ -3956,69 +4000,22 @@ window.addEventListener('hashchange',openLinkedSource);
         self._finish_problem_action(key, f"已恢复题目 {pid}（{title}），它回到「全部题目」里了。")
 
     def _purge_problem(self, pid: str, key: str) -> None:
-        """**彻底删除**：评测站题目 + 本地四处残留一起清 —— 这一步不可逆。
-
-        清这些地方（漏一个就会在「题目列表」里留一行指向已删题目的空壳）：
-          * 评测站上的题目 —— `importer.hydro_delete_problem(pid)`
-          * `data/problem_codes.json` —— 题目编号登记
-          * `data/problem_info.json`  —— 测试点/时限/内存这些建题时记的元信息
-          * `data/statements/<pid>.md` —— 题面缓存
-          * `data/samples/<pid>/`      —— 大样例存档
-
-        慢是正常的：要进容器跑 mongosh 查 docId、再跑 hydrooj cli 删题，最后刷题库缓存。
-        日常"删掉不想要的题"用假删除（`_delete_problem`）就够了，别走这条。
-        """
+        """Remove an unused question; failed cleanup preserves recoverable content."""
         pid = (pid or "").strip()
-        if not judgelocal.valid_pid(pid):
-            self._finish_problem_action(key, "题目标识无效。", ok=False)
-            return
-        used = self._problem_in_use(pid)
-        if used:
-            self._finish_problem_action(key, (
-                f"「{pid}」还在比赛里用着，不能删：{'、'.join(used)}。"
-                f"先从那些比赛里把它移除，再回来删。"), ok=False)
-            return
         title = str((load_problem_info().get(pid) or {}).get("title") or pid)
-        done, failed = [], []
-        # **本地题目数据**（测试点 + 题面）：这一版起这两样才是正本，删掉才算真删
+        from ..core.problem_lifecycle import purge
         try:
-            gone = judgelocal.drop_problem_data(pid)
-            done.extend(f"本地{g}" for g in gone)
-        except Exception as e:                                     # noqa: BLE001
-            log(f"[管理端] 彻底删题 {pid}：删本地题目数据失败 {e!r}")
-            failed.append("本地题目数据")
-        codes = make_problem.load_codes()
-        if pid in codes:
-            codes.pop(pid)
-            make_problem.save_codes(codes)
-            done.append("题目编号")
-        info = load_problem_info()
-        if pid in info:
-            info.pop(pid)
-            save_problem_info(info)
-            done.append("题目信息")
-        # 题面缓存 + 大样例存档（和建题时作废旧缓存的实现同一份，别各写一遍）
-        cache_gone = make_problem.drop_problem_cache(pid)
-        if cache_gone:
-            done.extend(cache_gone)
-        # 题库缓存也刷新一下，别再列出这道题
-        try:
-            store.save_catalog(localoj.list_problems())
-        except OSError as e:
-            log(f"[管理端] 彻底删题 {pid}：刷新题库缓存失败 {e!r}")
-        log(f"[管理端] 彻底删除题目 {pid}（{title}），清掉了：{'、'.join(done) or '无（本来就没有）'}"
-            + (f"；**没删掉**：{'、'.join(failed)}" if failed else ""))
-        if failed:
-            # 本地删不干净（权限/占用之类）：如实说，别报"已彻底删除"
-            self._finish_problem_action(key, (
-                f"「{pid}」（{title}）**没能删干净**：{'、'.join(failed)}。"
-                f"多半是文件被占用或权限不对，可以过一会儿再点一次「彻底删除」。"
-                f"（登记里的信息已经清掉了，所以它不会再出现在列表里。）"), ok=False)
+            result = purge(pid)
+        except Exception as error:
+            log(f"[管理端] 彻底删题 {pid} 失败：{error!r}")
+            self._finish_problem_action(key, f"删除失败：{error}", ok=False)
             return
-        self._finish_problem_action(key, (
-            f"已彻底删除题目 {pid}（{title}）" +
-            (f"：{'、'.join(done)}。" if done else "：本地没有它的残留。") +
-            "题面与历史提交记录里这道题都会显示为已删除。"))
+        if result["cleanup_error"]:
+            log(f"[管理端] 彻底删题 {pid}：{result['cleanup_error']}")
+            self._finish_problem_action(key, result["cleanup_error"], ok=False)
+            return
+        log(f"[管理端] 彻底删除题目 {pid}（{title}）")
+        self._finish_problem_action(key, f"已彻底删除题目 {pid}（{title}）。历史提交与成绩记录保留。")
 
     def _admin_problem_post(self):
         q = self._query()

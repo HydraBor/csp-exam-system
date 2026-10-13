@@ -654,9 +654,15 @@ def drop_problem_cache(pid: str) -> list[str]:
     if database.delete_statement(store.DATA_DIR, pid):
         gone.append("题面缓存")
     database.delete(store.DATA_DIR, "samples/" + pid)
+    legacy = os.path.join(store.DATA_DIR, "statements", pid + ".md")
+    if os.path.islink(legacy):
+        raise ValueError("旧题面文件路径异常")
+    if os.path.isfile(legacy):
+        os.unlink(legacy)
+        gone.append("旧题面文件")
     samples = os.path.join(store.DATA_DIR, "samples", pid)
     if os.path.isdir(samples):
-        shutil.rmtree(samples, ignore_errors=True)
+        shutil.rmtree(samples)
         gone.append("大样例存档")
     return gone
 

@@ -185,7 +185,7 @@ def drop_problem_data(pid: str) -> list:
     gone = []
     d = os.path.dirname(cases_dir(pid))
     if os.path.isdir(d):
-        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(d)
         gone.append("测试点")
     from . import store as _store
     from . import database

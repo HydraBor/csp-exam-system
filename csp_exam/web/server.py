@@ -180,7 +180,7 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         cache = ("public, max-age=0, must-revalidate" if safe in
-                 ("exam-components.css", "scoreboard.css", "contest.js", "submission.js", "admin-ui.js") else "public, max-age=2592000")
+                 ("exam-components.css", "scoreboard.css", "contest.js", "submission.js", "admin-ui.js", "problem-library.js") else "public, max-age=2592000")
         self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(data)
@@ -189,8 +189,8 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         q = urllib.parse.urlparse(self.path).query
         return {k: v[0] for k, v in urllib.parse.parse_qs(q).items()}
 
-    def _form(self) -> dict:
-        n = self._request_size(MAX_UPLOAD)
+    def _form(self, max_bytes: int = MAX_UPLOAD) -> dict:
+        n = self._request_size(max_bytes)
         body = self.rfile.read(n).decode("utf-8", "replace")
         return {k: v[0] for k, v in urllib.parse.parse_qs(body).items()}
 
@@ -565,6 +565,9 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         if path == "/admin/problem":
             self._admin_problem_post()
             return
+        if path == "/admin/problem-export":
+            from .problem_export import route
+            return route(self, self._query())
         if path == "/admin/statement":          # 改题面：保存
             self._admin_statement_post()
             return

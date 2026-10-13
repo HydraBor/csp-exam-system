@@ -128,10 +128,10 @@ def build_zip(output, selected=None, *, max_bytes=None):
                             digest.update(chunk)
                             total += len(chunk)
                             if max_bytes is not None and total > max_bytes:
-                                raise ValueError("题包超过本部署的题目上传上限，请先调整 CSP_MAX_PS_UPLOAD_MB。")
+                                raise ValueError("题包超过本部署的导出上限，请减少所选题目或联系管理员调整上限。")
             hashes[name] = digest.hexdigest()
             if len(hashes) > 20000 or max_bytes is not None and total > max_bytes:
-                raise ValueError("题包超过本部署的题目上传上限，请先调整 CSP_MAX_PS_UPLOAD_MB。")
+                raise ValueError("题包超过本部署的导出上限，请减少所选题目或联系管理员调整上限。")
 
         with store._LOCK, database.transaction(store.DATA_DIR):
             rows = [r for r in localoj.list_problems() if not problems.is_deleted(r["pid"])]
