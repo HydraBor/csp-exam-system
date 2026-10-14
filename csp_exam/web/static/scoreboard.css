@@ -11,13 +11,26 @@
  height:48px;padding:12px 18px;border-bottom:1px solid #e8edf3;white-space:nowrap}
 .board tbody td{height:64px;padding:12px 18px;border-bottom:1px solid #eef1f6;white-space:nowrap;background:white}
 .board tbody tr:last-child td{border-bottom:0}.board tbody tr:hover td{background:#f8faff}
-.rank-col{width:84px;min-width:70px}.name-col{text-align:left;min-width:155px;max-width:240px}
-.total-col{width:110px;min-width:90px}.problem-col{min-width:100px}
-.affiliation-col{text-align:left;min-width:130px;max-width:220px}
+.board tr>:nth-child(-n+6){padding-left:8px;padding-right:8px}
+.rank-col{width:64px;min-width:64px}.board tr>:nth-child(2){width:84px;min-width:84px}
+.name-col{text-align:left;width:108px;min-width:88px;max-width:108px}
+.total-col{width:76px;min-width:76px}.problem-col{min-width:88px}
+.affiliation-col{text-align:left;width:100px;min-width:90px;max-width:100px}
+.board tr>:nth-child(5){width:88px;min-width:88px;max-width:88px}
 .board td.affiliation-col{white-space:normal;overflow-wrap:anywhere;color:#626f86;font-size:13px}
 .board-filters>div{min-width:180px;flex:0 1 230px}.board-filters label{margin-bottom:6px}
-.board .rank-col{min-width:95px}.board-filters+.scroll{max-height:calc(100vh - 355px)}
+.board-filters+.scroll{max-height:calc(100vh - 355px)}
+.board-grid-enhanced{overflow:hidden;max-height:none!important}
+.board-grid{height:clamp(240px,calc(100dvh - 355px),640px);width:100%;font-variant-numeric:tabular-nums}
+.board-grid .board-score-header .ag-header-cell-label{justify-content:center}
+.board-grid .board-cell{display:flex;align-items:center;justify-content:center;min-height:53px}
+.board-grid .board-cell-wrap{display:block;min-height:53px;padding:16px 0;line-height:21px;white-space:normal;overflow-wrap:anywhere}
+.board-grid .student-name{display:inline;line-height:21px}.board-grid .student-name svg{vertical-align:middle;margin-left:4px}
+.board-grid .board-identity-cell{color:#626f86}
+.board-grid .ag-cell-wrapper,.board-grid .ag-cell-value{width:100%}
+.board-grid .total{font-size:18px}.board-grid .total.waiting{font-size:12px}
 @media(max-width:575px){.board-filters>div{flex:1 1 100%;min-width:0}.tools{width:100%}.search{flex:1}.search input{width:100%}.board-filters+.scroll{max-height:65vh}}
+@media(max-width:575px){.board-grid{height:65dvh;min-height:240px}}
 .rank{color:#94a0b1;font-size:15px}.rank.leader{color:#365f9d;font-weight:650}
 .student-name{font-weight:550;white-space:normal;overflow-wrap:anywhere;display:inline-flex;align-items:center;gap:7px}
 a.student-name:hover{color:#245cd3}.student-name svg{color:#a8b5c6;width:13px;height:13px;flex-shrink:0}
