@@ -49,10 +49,13 @@ def _snapshot(cid: str, contest: dict, *, private: bool) -> dict:
         return {"ok": True, "released": False, "title": contest["title"]}
     problems = exam.get("problems") or []
     all_results = store.load_results(cid)
+    roster = store.load_roster(cid)
     rows = []
     for ranked in store.ranking(cid, include_all=True, _results=all_results):
         result = all_results.get(ranked["kaohao"]) or {}
         row = {"name": ranked["name"],
+               "campus": str((roster.get(ranked["kaohao"]) or {}).get("campus") or ""),
+               "teacher": str((roster.get(ranked["kaohao"]) or {}).get("teacher") or ""),
                "scores": [int((ranked["problems"].get(store.problem_dir_name(int(p["no"]))) or {}).get("score") or 0) for p in problems],
                "total": ranked["total"], "pending": ranked["pending"],
                "submitted": ranked["submitted"], "rank": ranked["rank"]}

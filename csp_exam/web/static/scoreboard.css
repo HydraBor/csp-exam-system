@@ -13,6 +13,11 @@
 .board tbody tr:last-child td{border-bottom:0}.board tbody tr:hover td{background:#f8faff}
 .rank-col{width:84px;min-width:70px}.name-col{text-align:left;min-width:155px;max-width:240px}
 .total-col{width:110px;min-width:90px}.problem-col{min-width:100px}
+.affiliation-col{text-align:left;min-width:130px;max-width:220px}
+.board td.affiliation-col{white-space:normal;overflow-wrap:anywhere;color:#626f86;font-size:13px}
+.board-filters>div{min-width:180px;flex:0 1 230px}.board-filters label{margin-bottom:6px}
+.board .rank-col{min-width:95px}.board-filters+.scroll{max-height:calc(100vh - 355px)}
+@media(max-width:575px){.board-filters>div{flex:1 1 100%;min-width:0}.tools{width:100%}.search{flex:1}.search input{width:100%}.board-filters+.scroll{max-height:65vh}}
 .rank{color:#94a0b1;font-size:15px}.rank.leader{color:#365f9d;font-weight:650}
 .student-name{font-weight:550;white-space:normal;overflow-wrap:anywhere;display:inline-flex;align-items:center;gap:7px}
 a.student-name:hover{color:#245cd3}.student-name svg{color:#a8b5c6;width:13px;height:13px;flex-shrink:0}

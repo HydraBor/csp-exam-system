@@ -130,7 +130,10 @@ def _rows(cid: str, state: dict, private: bool, key: str) -> str:
         label = {"queued": "排队中", "judging": "评测中", "error": "待重测", "blocked": "待补资料"}.get(row.get("state"), "待评测")
         total = label if row["pending"] else str(row["total"]) if row["submitted"] else "—"
         parts.append(f'<tr><td class="rank-col rank{leader}">{rank}</td>'
+                     f'<td class="rank-col rank">{rank}</td>'
                      f'<td class="name-col">{name}</td>'
+                     f'<td class="affiliation-col">{html.escape(str(row.get("campus") or "未填写"))}</td>'
+                     f'<td class="affiliation-col">{html.escape(str(row.get("teacher") or "未填写"))}</td>'
                      f'<td class="total-col total{" waiting" if row["pending"] or not row["submitted"] else ""}">{total}</td>')
         for score, problem in zip(row["scores"], state["problems"]):
             blank = row["pending"] or not row["submitted"]
@@ -145,7 +148,7 @@ def _rows(cid: str, state: dict, private: bool, key: str) -> str:
                 cell = f'<span class="score {cls}" title="{html.escape(hint, quote=True)}">{text}</span>'
             parts.append(f'<td class="problem-col">{cell}</td>')
         parts.append('</tr>')
-    return "".join(parts) or f'<tr><td class="empty" colspan="{3 + len(state.get("problems", []))}">暂无学生</td></tr>'
+    return "".join(parts) or f'<tr><td class="empty" colspan="{6 + len(state.get("problems", []))}">暂无学生</td></tr>'
 
 
 def render(cid: str, state: dict, *, private: bool = False, key: str = "", teacher: bool = False,
@@ -173,12 +176,18 @@ def render(cid: str, state: dict, *, private: bool = False, key: str = "", teach
         heads = ''.join(f'<th scope="col" class="problem-col" title="满分 {p["full"]}">{html.escape(p["name"])}</th>' for p in state.get("problems", []))
         body += ('<section class="panel" aria-label="排行榜"><div id="board-content"' + (' hidden' if locked else '') + '>'
                  '<div class="toolbar"><span id="count" class="count"><strong>' + str(len(state.get("rows", []))) + '</strong> 位学生</span>'
-                 '<div class="tools"><span id="status" class="board-status" role="status"></span><label class="search">'
+                 '<div class="tools flex-wrap"><span id="status" class="board-status" role="status"></span><label class="search mb-0">'
                  '<span class="sr-only">搜索学生</span>' + icon("search") +
                  '<input id="search" type="search" placeholder="搜索学生" autocomplete="off"></label>'
                  '<button id="refresh" class="refresh" type="button" aria-label="刷新排行榜" title="刷新">' + icon("refresh") + '</button></div></div>'
+                 '<div class="board-filters card-body border-bottom d-flex flex-wrap align-items-end gap-3">'
+                 '<div><label class="form-label" for="campus-filter">校区</label><select id="campus-filter" class="form-select form-select-sm"><option value="">全部校区</option></select></div>'
+                 '<div><label class="form-label" for="teacher-filter">指导老师</label><select id="teacher-filter" class="form-select form-select-sm"><option value="">全部指导老师</option></select></div>'
+                 '<button id="reset-filters" type="button" class="btn btn-sm btn-outline-secondary">重置筛选</button>'
+                 '<p class="text-secondary small mb-0 ms-lg-auto">同分并列；未提交或未完成评测不参与排名。</p></div>'
                  '<div class="scroll" tabindex="0" role="region" aria-label="成绩表"><table aria-label="学生分数">'
-                 '<thead id="board-head"><tr><th scope="col" class="rank-col">名次</th><th scope="col" class="name-col">学生</th>'
+                 '<thead id="board-head"><tr><th scope="col" class="rank-col">总排名</th><th scope="col" class="rank-col">筛选内排名</th><th scope="col" class="name-col">学生</th>'
+                 '<th scope="col" class="affiliation-col">校区</th><th scope="col" class="affiliation-col">指导老师</th>'
                  '<th scope="col" class="total-col">总分</th>' + heads + '</tr></thead>'
                  '<tbody id="board-rows">' + ("" if locked else _rows(cid, state, private, key)) + '</tbody></table></div></div>'
                  '<div id="locked" class="locked"' + ('' if locked else ' hidden') + '>' + icon("lock") + '比赛结束且老师公布成绩后才能查看排行榜。</div></section>')
@@ -187,7 +196,7 @@ def render(cid: str, state: dict, *, private: bool = False, key: str = "", teach
                   "etag": _etag(state)}
         body += ('<script type="application/json" id="board-data">' + _json_bytes(state).decode().replace("<", "\\u003c") + '</script>'
                  '<script type="application/json" id="board-config">' + json.dumps(config, ensure_ascii=False).replace("<", "\\u003c") + '</script>'
-                 '<script>' + SCRIPT + '</script>')
+                 '<script src="/static/scoreboard-filters.js"></script><script>' + SCRIPT + '</script>')
     return page(title + ' · 排行榜', body + '</section>', show_title=False,
                 extra_head='<link rel="stylesheet" href="/static/scoreboard.css">')
 
@@ -197,19 +206,29 @@ SCRIPT = r"""
 const cfg=JSON.parse(document.getElementById('board-config').textContent);
 let state=JSON.parse(document.getElementById('board-data').textContent),etag=cfg.etag,busy=false;
 const body=document.getElementById('board-rows'),search=document.getElementById('search'),status=document.getElementById('status'),refresh=document.getElementById('refresh');
+const campus=document.getElementById('campus-filter'),teacher=document.getElementById('teacher-filter'),filtering=window.CSPBoardFilters;
 const arrow='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 12 12 4M5 4h7v7"/></svg>';
 function node(tag,text,cls){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n}
 function studentHref(r){const q=new URLSearchParams({c:cfg.cid,k:r.kaohao});if(cfg.key)q.set('key',cfg.key);return '/admin/student?'+q}
+function fillOptions(select,values,label){
+ const selected=select.value,fragment=document.createDocumentFragment(),all=node('option',label);all.value='';fragment.append(all);
+ values.forEach(v=>{const option=node('option',v||'未填写');option.value=v?'='+v:'~';fragment.append(option)});
+ if(selected&&!values.some(v=>(v?'='+v:'~')===selected)){const option=node('option',(selected==='~'?'未填写':selected.slice(1))+'（无匹配）');option.value=selected;fragment.append(option)}
+ select.replaceChildren(fragment);select.value=selected;
+}
+function fillFilters(){fillOptions(campus,filtering.options(state,'campus'),'全部校区');fillOptions(teacher,filtering.options(state,'teacher',campus.value),'全部指导老师')}
 function drawRows(){
- const filter=search.value.trim().toLocaleLowerCase();
- const rows=(state.rows||[]).filter(r=>(r.name+' '+(cfg.private?r.kaohao:'')).toLocaleLowerCase().includes(filter));
+ const filters={search:search.value,campus:campus.value,teacher:teacher.value};
+ const rows=filtering.rows(state,filters,cfg.private),filter=filters.search.trim()||filters.campus||filters.teacher;
  const fragment=document.createDocumentFragment();
  rows.forEach(r=>{
   const tr=document.createElement('tr'),rank=r.rank===null?'—':r.rank;
   tr.append(node('td',rank,'rank-col rank'+(r.rank!==null&&r.rank<=3?' leader':'')));
+  tr.append(node('td',r.filtered_rank==null?'—':r.filtered_rank,'rank-col rank'));
   const name=node('td','','name-col'),who=node(cfg.private?'a':'span',r.name,'student-name');
   if(cfg.private){who.href=studentHref(r);who.title='查看提交 · '+r.kaohao;who.insertAdjacentHTML('beforeend',arrow)}
   name.append(who);tr.append(name);
+  tr.append(node('td',r.campus||'未填写','affiliation-col'));tr.append(node('td',r.teacher||'未填写','affiliation-col'));
   const label=({queued:'排队中',judging:'评测中',error:'待重测',stale:'待重测',blocked:'待补资料'})[r.state]||'待评测';
   tr.append(node('td',r.pending?label:r.submitted?r.total:'—','total-col total'+(r.pending||!r.submitted?' waiting':'')));
   r.scores.forEach((v,i)=>{
@@ -220,7 +239,7 @@ function drawRows(){
    td.append(score);tr.append(td);
   });fragment.append(tr);
  });
- if(!rows.length){const tr=document.createElement('tr'),td=node('td',filter?'未找到学生':'暂无学生','empty');td.colSpan=3+(state.problems||[]).length;tr.append(td);fragment.append(tr)}
+ if(!rows.length){const tr=document.createElement('tr'),td=node('td',filter?'未找到符合条件的学生':'暂无学生','empty');td.colSpan=6+(state.problems||[]).length;tr.append(td);fragment.append(tr)}
  body.replaceChildren(fragment);
  document.getElementById('count').replaceChildren(node('strong',rows.length),' 位学生'+(filter?' / '+state.rows.length:''));
 }
@@ -232,9 +251,9 @@ function draw(){
  document.getElementById('locked').hidden=!!state.released;
  if(!state.released){body.replaceChildren();return}
  const tr=document.createElement('tr');
- ['名次','学生','总分'].forEach((v,i)=>{const th=node('th',v,['rank-col','name-col','total-col'][i]);th.scope='col';tr.append(th)});
+ ['总排名','筛选内排名','学生','校区','指导老师','总分'].forEach((v,i)=>{const th=node('th',v,['rank-col','rank-col','name-col','affiliation-col','affiliation-col','total-col'][i]);th.scope='col';tr.append(th)});
  state.problems.forEach(p=>{const th=node('th',p.name,'problem-col');th.scope='col';th.title='满分 '+p.full;tr.append(th)});
- document.getElementById('board-head').replaceChildren(tr);drawRows();
+ document.getElementById('board-head').replaceChildren(tr);fillFilters();drawRows();
 }
 async function update(manual=false){
  if(busy||(!manual&&document.hidden))return;
@@ -251,7 +270,10 @@ async function update(manual=false){
  finally{clearTimeout(timeout);busy=false;refresh.disabled=false}
 }
 search.addEventListener('input',drawRows);refresh.addEventListener('click',()=>update(true));
+campus.addEventListener('change',()=>{teacher.value='';fillFilters();drawRows()});teacher.addEventListener('change',drawRows);
+document.getElementById('reset-filters').addEventListener('click',()=>{campus.value='';teacher.value='';search.value='';fillFilters();drawRows()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)update()});
 setInterval(update,15000);
+draw();
 })();
 """

@@ -261,7 +261,23 @@ def clean_names(names: list[str]) -> tuple[list[str], list[str]]:
     return out, dup
 
 
-def create_group(name: str, names: list[str]) -> dict:
+def affiliation(campus="", teacher="") -> dict:
+    """Uniform group/roster labels; empty values keep legacy enrollments valid."""
+    result = {}
+    for field, label, value in (("campus", "校区", campus), ("teacher", "指导老师", teacher)):
+        text = str(value or "").strip()
+        if len(text) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in text):
+            raise ValueError(f"{label}最多100个字符，不能包含换行或控制字符。")
+        result[field] = text
+    return result
+
+
+def student_identity(student: dict) -> tuple[str, str, str]:
+    """Equal names with different campuses OR teachers are distinct students."""
+    return tuple(str(student.get(k) or "").strip() for k in ("name", "campus", "teacher"))
+
+
+def create_group(name: str, names: list[str], *, campus="", teacher="") -> dict:
     with _LOCK:
         items = load_groups()
         cleaned, _ = clean_names(names)
@@ -271,23 +287,28 @@ def create_group(name: str, names: list[str]) -> dict:
             seq += 1
             gid = "g" + str(seq)
         g = {"gid": gid, "name": name.strip() or f"分组 {seq}",
-             "students": cleaned, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+             "students": cleaned, **affiliation(campus, teacher),
+             "at": time.strftime("%Y-%m-%d %H:%M:%S")}
         items.append(g)
         save_groups(items)
         return g
 
 
-def update_group(gid: str, *, name: str | None = None, names: list[str] | None = None) -> dict | None:
+def update_group(gid: str, *, name: str | None = None, names: list[str] | None = None,
+                 campus: str | None = None, teacher: str | None = None) -> dict | None:
     with _LOCK:
         items = load_groups()
         for g in items:
             if g.get("gid") != gid:
                 continue
+            attrs = affiliation(g.get("campus", "") if campus is None else campus,
+                                g.get("teacher", "") if teacher is None else teacher)
             if name is not None:
                 g["name"] = name.strip() or g["name"]
             if names is not None:
                 cleaned, _ = clean_names(names)
                 g["students"] = cleaned
+            g.update(attrs)
             g["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_groups(items)
             return g
@@ -610,7 +631,11 @@ def save_roster(cid: str, mapping: dict[str, dict]) -> None:
         from . import attempts
         previous = load_roster(cid)
         for kh in attempts.all_for(cid):
-            if mapping.get(kh) != previous.get(kh):
+            # Affiliation corrections and group membership never change login,
+            # source snapshots, scores or the running student's fixed deadline.
+            metadata = {"campus", "teacher", "group_ids", "group_names"}
+            fixed = lambda r: {k: v for k, v in (r or {}).items() if k not in metadata}
+            if kh not in mapping or fixed(mapping[kh]) != fixed(previous.get(kh)):
                 raise ValueError("已有学生开考，不能删除或重新分配其考号；可以追加新考生。")
         _save(_cp(cid, "roster.json"), {k: mapping[k] for k in sorted(mapping)})
 
@@ -691,8 +716,34 @@ def _taken_numbers(roster: dict, *, stale_days: float = STALE_DAYS) -> set[int]:
     return taken
 
 
+def _enrollments(names, *, campus="", teacher="", group_id="", group_name="") -> list[dict]:
+    defaults = affiliation(campus, teacher)
+    records, seen = [], set()
+    for raw in names:
+        entry = dict(raw) if isinstance(raw, dict) else {"name": str(raw)}
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        attrs = affiliation(entry.get("campus", defaults["campus"]),
+                            entry.get("teacher", defaults["teacher"]))
+        rec = {"name": name, **attrs}
+        for key in ("group_ids", "group_names"):
+            rec[key] = list(dict.fromkeys(str(v) for v in entry.get(key, []) if v))
+        if group_id and group_id not in rec["group_ids"]:
+            rec["group_ids"].append(group_id)
+        if group_name and group_name not in rec["group_names"]:
+            rec["group_names"].append(group_name)
+        identity = student_identity(rec)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        records.append(rec)
+    return records
+
+
 def assign_kaohaos(cid: str, names: list[str], prefix: str | None = None,
-                   level: str | None = None, width: int = DEFAULT_WIDTH) -> dict[str, dict]:
+                   level: str | None = None, width: int = DEFAULT_WIDTH, *,
+                   campus="", teacher="", group_id="", group_name="") -> dict[str, dict]:
     """把姓名加进本场名单并**生成考号**（纯随机）。
 
     - 已经在名单里的人保持不变（不会因为再导入一次就换考号）；
@@ -707,26 +758,37 @@ def assign_kaohaos(cid: str, names: list[str], prefix: str | None = None,
         prefix = prefix or contest.get("prefix") or DEFAULT_PREFIX
         level = level or level_of(contest)
         roster = load_roster(cid)
-        cleaned, _ = clean_names(names)
-        have = {v.get("name") for v in roster.values()}
-        fresh = [n for n in cleaned if n not in have]
+        cleaned = _enrollments(names, campus=campus, teacher=teacher,
+                               group_id=group_id, group_name=group_name)
+        have = {student_identity(v): k for k, v in roster.items()}
+        fresh = []
+        for student in cleaned:
+            kh = have.get(student_identity(student))
+            if kh is None:
+                fresh.append(student)
+            else:
+                for field in ("group_ids", "group_names"):
+                    joined = list(dict.fromkeys(list(roster[kh].get(field, [])) + student[field]))
+                    if joined:
+                        roster[kh][field] = joined
         if fresh:
             taken = _taken_numbers(roster)
             nums = _random_numbers(len(fresh), taken, width)
-            for name, num in zip(fresh, nums):
+            for student, num in zip(fresh, nums):
                 kaohao = make_kaohao(num, prefix, level, width)
                 # 撞到「最近有人用」的号 → 重新随机；撞到半个月前的残留 → 覆盖它
                 while kaohao in roster and _entry_age_days(roster[kaohao]) <= STALE_DAYS:
                     nums2 = _random_numbers(1, taken, width)
                     kaohao = make_kaohao(nums2[0], prefix, level, width)
-                roster[kaohao] = dict(new_account(cid, kaohao), name=name,
+                roster[kaohao] = dict(new_account(cid, kaohao), **student,
                                       at=time.strftime("%Y-%m-%d %H:%M:%S"))
         save_roster(cid, roster)
         return roster
 
 
 def replace_roster(cid: str, names: list[str], prefix: str | None = None,
-                   level: str | None = None, width: int = DEFAULT_WIDTH) -> dict[str, dict]:
+                   level: str | None = None, width: int = DEFAULT_WIDTH, *,
+                   campus="", teacher="", group_id="", group_name="") -> dict[str, dict]:
     """用这批姓名**重建**本场名单，并重新生成考号（整场重排）。"""
     with _LOCK:
         from . import attempts
@@ -735,12 +797,13 @@ def replace_roster(cid: str, names: list[str], prefix: str | None = None,
         contest = get_contest(cid) or {}
         prefix = prefix or contest.get("prefix") or DEFAULT_PREFIX
         level = level or level_of(contest)
-        cleaned, _ = clean_names(names)
+        cleaned = _enrollments(names, campus=campus, teacher=teacher,
+                               group_id=group_id, group_name=group_name)
         nums = _random_numbers(len(cleaned), set(), width)
         roster = {}
-        for name, num in zip(cleaned, nums):
+        for student, num in zip(cleaned, nums):
             kaohao = make_kaohao(num, prefix, level, width)
-            roster[kaohao] = dict(new_account(cid, kaohao), name=name,
+            roster[kaohao] = dict(new_account(cid, kaohao), **student,
                                   at=time.strftime("%Y-%m-%d %H:%M:%S"))
         save_roster(cid, roster)
         return roster
@@ -749,7 +812,7 @@ def replace_roster(cid: str, names: list[str], prefix: str | None = None,
 def reshuffle_kaohaos(cid: str, prefix: str | None = None,
                       level: str | None = None, width: int = DEFAULT_WIDTH) -> dict[str, dict]:
     """把本场已有的考号重新随机生成（学生不变）。"""
-    names = [v.get("name", "?") for _, v in sorted(load_roster(cid).items())]
+    names = [v for _, v in sorted(load_roster(cid).items())]
     return replace_roster(cid, names, prefix, level, width)
 
 
@@ -770,9 +833,25 @@ def roster_detail(cid: str) -> list[dict]:
         out.append({
             "kaohao": k, "name": v.get("name", "?"), "pw": v.get("pw", ""),
             "uname": v.get("uname", k), "uid": v.get("uid"),
+            "campus": str(v.get("campus") or ""), "teacher": str(v.get("teacher") or ""),
             "submitted": k in results,
         })
     return out
+
+
+def update_roster_affiliation(cid: str, kaohao: str, *, campus="", teacher="") -> dict:
+    """Correct one contest snapshot, retaining account, source, score and clock."""
+    with _LOCK:
+        roster = load_roster(cid)
+        if kaohao not in roster:
+            raise ValueError("本场不存在这个考号。")
+        updated = {**roster[kaohao], **affiliation(campus, teacher)}
+        identity = student_identity(updated)
+        if any(k != kaohao and student_identity(v) == identity for k, v in roster.items()):
+            raise ValueError("本场已有同姓名、同校区、同指导老师的学生，不能将两名考生改成同一身份。")
+        roster[kaohao] = updated
+        save_roster(cid, roster)
+        return updated
 
 
 def find_contests_of_kaohao(kaohao: str) -> list[dict]:

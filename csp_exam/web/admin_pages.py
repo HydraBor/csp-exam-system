@@ -39,7 +39,7 @@ from ..core.grading import graded_cell, graded_text
 from ..core.util import log, _fmt_bytes, _fmt_ms, _fmt_kb
 from ..config import (MAX_PS_UPLOAD, PORT, PS_JOBS, PS_JOBS_LOCK,
                       )
-from .urls import admin_url, cid_query, problem_detail_url, statement_url, problem_export_url
+from .urls import admin_url, cid_query, problem_detail_url, statement_url, problem_export_url, student_entry_url
 from .ui import (page, rule_badge, render_upload_tree_html, md_to_html,
                  level_badge, modal, code_pre)
 from .tabler_theme import components
@@ -920,23 +920,24 @@ class AdminPages:
     def _admin_home(self, q: dict, cookie: str = "", flash: str = ""):
         key = q.get("key", "")
         # ---- 按「名单分组」看比赛：哪个组的成员被分到了哪几场 ----
-        # 分组里存的是**姓名**（groups.json 的 students），比赛名单里也只有考号→姓名，
-        # 两边都没有"这个学生属于哪个组"的字段 —— 所以按姓名匹配。一个人在多个组里
-        # （集训班 + 周末班）就**每个组都算他一份**：这样"南山S 的成员上了哪几场"才是全的。
-        # 谁的分组都匹配不上（名单是手打的）→ 归「（未分组）」。
+        # New enrollments remember source groups; legacy entries use the complete
+        # name/campus/teacher identity rather than matching unrelated namesakes.
         groups = store.load_groups()
-        name2groups: dict[str, list[str]] = {}
+        identity2groups: dict[tuple, list[str]] = {}
+        group_labels = {g['gid']: str(g.get('name') or g['gid']) for g in groups}
         for g in groups:
             gname = str(g.get("name") or g.get("gid") or "")
             for nm in (g.get("students") or []):
-                name2groups.setdefault(str(nm), []).append(gname)
+                identity = store.student_identity({'name': nm, 'campus': g.get('campus'), 'teacher': g.get('teacher')})
+                identity2groups.setdefault(identity, []).append(gname)
         OTHER = "（未分组）"
 
         def breakdown(roster: dict) -> dict:
             """这场比赛的名单里，每个分组各有多少人。"""
             cnt: dict[str, int] = {}
             for rec in (roster or {}).values():
-                gs = name2groups.get(str((rec or {}).get("name") or ""))
+                gids = (rec or {}).get('group_ids')
+                gs = [group_labels[gid] for gid in gids if gid in group_labels] if gids else identity2groups.get(store.student_identity(rec or {}))
                 for gname in (gs or [OTHER]):
                     cnt[gname] = cnt.get(gname, 0) + 1
             return cnt
@@ -1258,6 +1259,7 @@ class AdminPages:
 
         rows = "".join(
             f'<tr><td>{html.escape(r["kaohao"])}</td><td>{html.escape(r["name"])}</td>'
+            f'<td>{html.escape(r["campus"] or "未填写")}</td><td>{html.escape(r["teacher"] or "未填写")}</td>'
             f'<td>{"已提交" if r.get("submitted") else "—"}</td>' + (
             f'<td>{contest_time.display(clocks.get(r["kaohao"], {}).get("start_at")) if r["kaohao"] in clocks else "未开考"}</td>'
             f'<td>{contest_time.display(clocks.get(r["kaohao"], {}).get("end_at")) if r["kaohao"] in clocks else "—"}</td>'
@@ -1267,13 +1269,14 @@ class AdminPages:
             f'<h3 style="font-size:15px;margin:20px 0 6px">本场名单（{len(roster)} 人）'
             f'<span class="muted"> 考号随机分配，发下去之前建议点开「考号表」核对</span></h3>'
             f'<div style="overflow:auto">'
-            f'<table><tr><th>考号</th><th>姓名</th><th>提交</th>'
+            f'<table><tr><th>考号</th><th>姓名</th><th>校区</th><th>指导老师</th><th>提交</th>'
             + ('<th>个人开考时间</th><th>个人截止时间</th><th>考试状态</th>' if contest_time.flexible(contest) else '') + '</tr>'
             f'{rows}</table></div>' if roster else
             '<p class="muted" style="margin-top:14px">本场还没有名单，用上面的分组或粘贴名单导入。</p>')
         group_options = "".join(
             f'<option value="{html.escape(g.get("gid", ""))}">'
-            f'{html.escape(g.get("name", ""))}（{len(g.get("students") or [])} 人）</option>'
+            f'{html.escape(g.get("name", ""))} · {html.escape(g.get("campus") or "未填写校区")} · '
+            f'{html.escape(g.get("teacher") or "未填写指导老师")}（{len(g.get("students") or [])} 人）</option>'
             for g in store.load_groups()) or '<option value="">（还没有分组，可先去「管理名单分组」新建）</option>'
         # 本场题目：老师看到「题目编号（T00001，系统分配、用来定位查找）」+「英文名
         # （学生侧，可编辑）」两列。英文名的默认值取题库里建题时填的那个；题库没填过
@@ -1288,7 +1291,7 @@ class AdminPages:
                 "title": str(p.get("title") or ""),
                 "full": int(p.get("full") or 100),
             })
-        entry_url = f"http://{self.headers.get('Host', '').split(':')[0]}:{PORT}/enter?c={urllib.parse.quote(cid)}"
+        entry_url = student_entry_url(self.headers, cid)
         api_query = cid_query(key, cid)      # 选题下拉用的 /api/problems 地址（带密钥或靠 cookie）
         # 题库登记表：每道题的题目编号 + 建题时填的默认英文名
         # （选题候选表、已选题目表都要显示，而接口 /api/problems 只回 pid+标题）
@@ -1318,7 +1321,7 @@ class AdminPages:
 {flash}
 <p>{rule_badge(contest)} {level_badge(contest)}
    <b>{html.escape(contest["title"])}</b></p>
-<p><b>学生入口</b>：<code>{entry_url}</code></p>
+<p><b>学生入口</b>：<code>{html.escape(entry_url)}</code></p>
 <div class="kv card">
   <div><b>名单</b>{len(roster)} 人</div>
   <div><b>已提交</b>{len(results)} 人</div>
@@ -1369,6 +1372,13 @@ class AdminPages:
 <p style="margin-top:12px"><b>② 或者临时粘贴名单</b>（每行一个姓名，可从 Excel 整列粘贴；
    不用动就留空，保存时跳过）：</p>
 <textarea name="names" placeholder="学生01&#10;学生02&#10;学生03" style="min-height:110px"></textarea>
+<div class="d-flex flex-wrap gap-3 mt-3">
+  <div class="flex-fill"><label for="roster-campus">校区（粘贴名单使用）</label>
+    <input id="roster-campus" name="roster_campus" maxlength="100" placeholder="例如 深圳南山校区"></div>
+  <div class="flex-fill"><label for="roster-teacher">指导老师（粘贴名单使用）</label>
+    <input id="roster-teacher" name="roster_teacher" maxlength="100" placeholder="例如 张老师"></div>
+</div>
+<p class="text-secondary small mt-2">从分组导入时统一沿用分组的校区与指导老师。报名时保存归属，之后修改分组不会更改本场名单。同姓名但校区或指导老师不同，会分别生成考号。</p>
 <div class="row" style="margin-top:12px">
   <label><input type="radio" name="mode" value="append" checked style="width:auto"> 追加（已有学生保持原考号）</label>
   <label><input type="radio" name="mode" value="replace" style="width:auto"> 重建（清空后全部重发考号）</label>
@@ -1584,6 +1594,32 @@ class AdminPages:
 
 {GD_RULES}
 """
+        if roster:
+            options = ''.join(
+                f'<option value="{html.escape(r["kaohao"], quote=True)}" '
+                f'data-campus="{html.escape(r["campus"], quote=True)}" data-teacher="{html.escape(r["teacher"], quote=True)}">'
+                f'{html.escape(r["name"])} · {html.escape(r["campus"] or "未填写校区")} · '
+                f'{html.escape(r["teacher"] or "未填写指导老师")} · {html.escape(r["kaohao"])}</option>'
+                for r in roster)
+            body += f'''<details class="card card-body mt-3" id="affiliation-correction">
+<summary class="fw-semibold">更正本场学生归属</summary>
+<p class="text-secondary small mt-3">只修改本场校区和指导老师，考号、计时、提交和成绩保留；不会更改原分组或其他比赛。</p>
+<form method="post" action="/admin/roster-affiliation{cid_query(key, cid)}">
+<div class="d-flex flex-wrap gap-3 align-items-end">
+  <div class="flex-fill"><label for="affiliation-student">学生与考号</label>
+    <select id="affiliation-student" name="kaohao" required>{options}</select></div>
+  <div class="flex-fill"><label for="affiliation-campus">校区</label>
+    <input id="affiliation-campus" name="campus" maxlength="100" value="{html.escape(roster[0]['campus'], quote=True)}"></div>
+  <div class="flex-fill"><label for="affiliation-teacher">指导老师</label>
+    <input id="affiliation-teacher" name="teacher" maxlength="100" value="{html.escape(roster[0]['teacher'], quote=True)}"></div>
+  <button class="btn btn-sm btn-primary" type="submit">保存本场归属</button>
+</div></form></details>
+<script>(function(){{
+var s=document.getElementById('affiliation-student');
+s.addEventListener('change',function(){{var o=s.selectedOptions[0];
+document.getElementById('affiliation-campus').value=o.dataset.campus||'';
+document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
+}})();</script>'''
         self._send(page(f"管理端 · {contest['title']}", body), cookie=cookie)
 
     def _admin_new(self):
@@ -1651,24 +1687,39 @@ class AdminPages:
                 return "这个分组不存在（可能已被删除）。", False
             names = list(g.get("students") or [])
             source = f"分组「{g['name']}」"
+            attrs = dict(campus=g.get('campus', ''), teacher=g.get('teacher', ''),
+                         group_id=g['gid'], group_name=g['name'])
         else:
             names = [n for n in re.split(r"[\r\n,，、\t]+", form.get("names", "")) if n.strip()]
             source = "粘贴的名单"
+            attrs = dict(campus=form.get('roster_campus', ''), teacher=form.get('roster_teacher', ''))
         if not names:
             return "", False
         if mode == "replace" and store.load_results(cid):
             return "本场已有提交，不能重建名单；请新建比赛。", False
         if mode == "replace":
             before = len(store.load_roster(cid))
-            roster = store.replace_roster(cid, names, prefix=prefix)
+            roster = store.replace_roster(cid, names, prefix=prefix, **attrs)
             note = f"已按{source}重建本场名单（原有 {before} 人已清空），{len(roster)} 人全部重新随机分配考号。"
         else:
             before = len(store.load_roster(cid))
-            roster = store.assign_kaohaos(cid, names, prefix=prefix)
+            roster = store.assign_kaohaos(cid, names, prefix=prefix, **attrs)
             note = (f"已按{source}导入：本场现在 {len(roster)} 人"
                     f"（新增 {len(roster) - before} 人，考号随机分配）。")
         store.update_contest(cid, prefix=prefix)
         return note, True
+
+    def _admin_roster_affiliation(self):
+        q = self._query()
+        if not self._check_admin(q.get('key', '')):
+            return self._json({'ok': False, 'error': '管理密钥不正确'}, 403)
+        cid = q.get('c', '')
+        if not store.get_contest(cid):
+            return self._json({'ok': False, 'error': '比赛不存在'}, 404)
+        form = self._form()
+        store.update_roster_affiliation(cid, form.get('kaohao', ''),
+                                        campus=form.get('campus', ''), teacher=form.get('teacher', ''))
+        self._redirect(admin_url(q.get('key', ''), cid, '本场归属已更正，考号、计时、提交和成绩保留。'))
 
     def _admin_reshuffle(self):
         """把本场考号重新随机分配（已有提交时拒绝，否则成绩会错位）。"""
@@ -1705,9 +1756,11 @@ class AdminPages:
             self._admin_home(q)
             return
         entries = sorted(store.load_roster(cid).items())
-        entry_url = f"http://{self.headers.get('Host', '').split(':')[0]}:{PORT}/enter?c={urllib.parse.quote(cid)}"
+        entry_url = student_entry_url(self.headers, cid)
         rows = "".join(
-            f'<tr><td><b>{html.escape(k)}</b></td><td>{html.escape(v.get("name", "?"))}</td></tr>'
+            f'<tr><td><b>{html.escape(k)}</b></td><td>{html.escape(v.get("name", "?"))}</td>'
+            f'<td>{html.escape(str(v.get("campus") or "未填写"))}</td>'
+            f'<td>{html.escape(str(v.get("teacher") or "未填写"))}</td></tr>'
             for k, v in entries)
         prefix = contest.get("prefix", store.DEFAULT_PREFIX)
         level = store.level_of(contest)
@@ -1738,7 +1791,7 @@ class AdminPages:
 <p><code style="font-size:15px">{html.escape(entry_url)}</code></p>
 <p class="muted">考号是本场随机生成的（5 位纯随机数），与其他场次无关；请勿把这张表公开张贴。
    本场时长 <b>{html.escape(hours)}</b>（{html.escape(store.level_name(level))}，{minutes} 分钟）。</p>
-<table><tr><th>考号</th><th>姓名</th></tr>{rows or '<tr><td colspan=2 class="muted">本场还没有名单</td></tr>'}</table>
+<table><tr><th>考号</th><th>姓名</th><th>校区</th><th>指导老师</th></tr>{rows or '<tr><td colspan=4 class="muted">本场还没有名单</td></tr>'}</table>
 </div>
 
 <p class="muted">这张表是给学生看的：一个人一行，剪开分发或贴在考场门口。点「打印这张表」直接出纸。</p>
@@ -1759,30 +1812,43 @@ class AdminPages:
         cards = []
         for g in groups:
             names = g.get("students") or []
+            gid_attr = html.escape(str(g['gid']), quote=True)
+            delete_prompt = html.escape(json.dumps(f"删除分组「{g.get('name', '')}」？已导入到考试里的名单不受影响。", ensure_ascii=False), quote=True)
             preview = "、".join(names[:12]) + ("…" if len(names) > 12 else "")
             # 「已用于」里带上那场比赛的级别与模式徽章（同一个分组会反复用在 J 组/S 组）
             used = []
             for c in store.list_contests():
-                if not (set(store.names_in_roster(c["id"])) & set(names)):
-                    continue
+                members = store.load_roster(c['id']).values()
+                identities = {store.student_identity({'name': n, 'campus': g.get('campus'), 'teacher': g.get('teacher')}) for n in names}
+                if any(g['gid'] in r.get('group_ids', []) or store.student_identity(r) in identities for r in members):
                     used.append(f'{html.escape(c["title"])} {level_badge(c)}')
             cards.append(f"""
 <div class="card">
 <h2 style="margin-top:0">{html.escape(g.get("name", ""))}
   <span class="muted">共 {len(names)} 人</span></h2>
 <p class="muted">{html.escape(preview) or "（空分组）"}</p>
+<p class="text-secondary small">校区：<strong>{html.escape(g.get('campus') or '未填写')}</strong>
+  <span class="mx-2">·</span>指导老师：<strong>{html.escape(g.get('teacher') or '未填写')}</strong></p>
 {f'<p class="muted">已用于：{"；".join(used)}</p>' if used else ''}
 <form method="post" action="{admin_url(key, path='/admin/groups')}" style="display:inline">
   <input type="hidden" name="action" value="update">
   <input type="hidden" name="gid" value="{html.escape(g.get('gid', ''))}">
-  <input type="hidden" name="group_name" value="{html.escape(g.get('name', ''))}">
-  <details style="margin:8px 0"><summary>编辑名单</summary>
+  <details style="margin:8px 0"><summary>编辑分组与名单</summary>
+    <div class="d-flex flex-wrap gap-3 my-3">
+      <div class="flex-fill"><label for="group-{gid_attr}-name">分组名称</label>
+        <input id="group-{gid_attr}-name" name="group_name" value="{html.escape(g.get('name', ''), quote=True)}"></div>
+      <div class="flex-fill"><label for="group-{gid_attr}-campus">校区</label>
+        <input id="group-{gid_attr}-campus" name="campus" maxlength="100" value="{html.escape(g.get('campus') or '', quote=True)}"></div>
+      <div class="flex-fill"><label for="group-{gid_attr}-teacher">指导老师</label>
+        <input id="group-{gid_attr}-teacher" name="teacher" maxlength="100" value="{html.escape(g.get('teacher') or '', quote=True)}"></div>
+    </div>
+    <p class="text-secondary small">本组所有学生统一使用上述校区和指导老师；修改后只影响之后的报名，不改变已经导入的比赛名单。</p>
     <textarea name="names" style="min-height:120px">{html.escape(chr(10).join(names))}</textarea>
-    <p><button type="submit">保存名单</button></p>
+    <p class="mt-3"><button class="btn btn-sm btn-primary" type="submit">保存分组</button></p>
   </details>
 </form>
 <form method="post" action="{admin_url(key, path='/admin/groups')}" style="display:inline"
-      onsubmit="return confirm('删除分组「{html.escape(g.get('name', ''))}」？已导入到考试里的名单不受影响。')">
+      onsubmit="return confirm({delete_prompt})">
   <input type="hidden" name="action" value="delete">
   <input type="hidden" name="gid" value="{html.escape(g.get('gid', ''))}">
   <button type="submit" class="btn btn-sm btn-danger">删除分组</button>
@@ -1796,12 +1862,18 @@ class AdminPages:
 <div class="card">
 <form method="post" action="{admin_url(key, path='/admin/groups')}">
 <input type="hidden" name="action" value="create">
-<p>分组名称 <input type="text" name="group_name" placeholder="例如 初三1班 / 集训A班"
-   style="width:280px;display:inline-block"></p>
+<div class="d-flex flex-wrap gap-3">
+  <div class="flex-fill"><label for="new-group-name">分组名称</label>
+    <input id="new-group-name" name="group_name" placeholder="例如 南山算法提高班"></div>
+  <div class="flex-fill"><label for="new-group-campus">校区</label>
+    <input id="new-group-campus" name="campus" maxlength="100" placeholder="例如 深圳南山校区"></div>
+  <div class="flex-fill"><label for="new-group-teacher">指导老师</label>
+    <input id="new-group-teacher" name="teacher" maxlength="100" placeholder="例如 张老师"></div>
+</div>
 <p style="margin-top:10px">学生姓名，每行一个（也可从 Excel 整列粘贴）：</p>
 <textarea name="names" placeholder="学生01&#10;学生02&#10;学生03"></textarea>
-<p style="margin-top:12px"><button type="submit">保存分组</button></p>
-<p class="muted">分组只是"一批学生"，可以反复用在不同考试里；每场考试的考号会自动随机分配。</p>
+<p style="margin-top:12px"><button class="btn btn-sm btn-primary" type="submit">保存分组</button></p>
+<p class="muted">组内学生统一归属一个校区和一位指导老师，报名时保存到本场名单；留空时显示“未填写”。同姓名但校区或指导老师不同，视为不同学生。</p>
 </form>
 </div>
 <h2>已有分组（{len(groups)} 个）</h2>
@@ -1819,7 +1891,8 @@ class AdminPages:
         action = form.get("action", "")
         names = [n for n in re.split(r"[\r\n,，、\t]+", form.get("names", "")) if n.strip()]
         if action == "create":
-            g = store.create_group(form.get("group_name", ""), names)
+            g = store.create_group(form.get("group_name", ""), names,
+                                   campus=form.get('campus', ''), teacher=form.get('teacher', ''))
             dup = store.clean_names(names)[1]
             msg = f"已新建分组「{g['name']}」，{len(g['students'])} 人。"
             if dup:
@@ -1828,7 +1901,7 @@ class AdminPages:
             return
         if action == "update":
             g = store.update_group(form.get("gid", ""), name=form.get("group_name"),
-                                   names=names)
+                                   names=names, campus=form.get('campus'), teacher=form.get('teacher'))
             msg = (f"分组「{g['name']}」已更新，{len(g.get('students') or [])} 人。"
                    if g else "分组不存在，未保存。")
             self._redirect(admin_url(key, msg=msg, path="/admin/groups"))

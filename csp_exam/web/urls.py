@@ -8,6 +8,27 @@ from __future__ import annotations
 import urllib.parse
 
 
+def student_entry_url(headers, cid: str) -> str:
+    """Use the configured public HTTPS origin, never the private backend port."""
+    from ..config import PUBLIC_ORIGIN
+    path = '/enter?' + urllib.parse.urlencode({'c': cid})
+    if PUBLIC_ORIGIN:
+        return PUBLIC_ORIGIN + path
+    host = str(headers.get('Host', '') or '')
+    try:
+        parsed = urllib.parse.urlsplit('http://' + host)
+        valid = (bool(parsed.hostname) and parsed.netloc == host and not parsed.username
+                 and not parsed.path and not parsed.query and not parsed.fragment
+                 and not any(c.isspace() or c in '<>"\'' for c in host))
+        parsed.port  # Reject an invalid port while keeping valid IPv6 Host values.
+    except ValueError:
+        valid = False
+    if not valid:
+        return path
+    scheme = 'https' if headers.get('X-Forwarded-Proto') == 'https' else 'http'
+    return scheme + '://' + host + path
+
+
 def cid_query(key: str, cid: str, kaohao: str = "") -> str:
     """拼查询串：管理端链接统一走这个（密钥可空——cookie 也能认证）。"""
     parts = []

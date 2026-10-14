@@ -180,7 +180,7 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         cache = ("public, max-age=0, must-revalidate" if safe in
-                 ("exam-components.css", "scoreboard.css", "contest.js", "submission.js", "admin-ui.js", "problem-library.js") else "public, max-age=2592000")
+                 ("exam-components.css", "scoreboard.css", "scoreboard-filters.js", "contest.js", "submission.js", "admin-ui.js", "problem-library.js") else "public, max-age=2592000")
         self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(data)
@@ -558,6 +558,9 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
             return
         if path == "/admin/roster":
             self._admin_roster()
+            return
+        if path == "/admin/roster-affiliation":
+            self._admin_roster_affiliation()
             return
         if path == "/admin/reshuffle":
             self._admin_reshuffle()
