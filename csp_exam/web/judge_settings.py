@@ -62,7 +62,7 @@ def route(handler, q, *, post=False):
         body += handler._flash("info", message)
     body += (f'<div class="card"><p>{html.escape(environment_text)}</p>'
              '<p>HydroJudge 4.0.6 + go-judge；Ubuntu 20.04 / G++ 9.3.0 工具链；C++ 参数：<code>-O2 -std=c++14 -static</code>。'
-             'CSP 使用文件输入输出。服务器内核和 CPU 与官方评测机不同。</p>'
+             'OI 使用指定文件输入输出，IOI 使用标准输入输出。服务器内核和 CPU 与官方评测机不同。</p>'
              f'<p>队列中有 {queued_count} 份提交 · 并发 1</p>'
              f'<p>时间倍率 <b>{scale:g}</b> · {"已有基准对比记录" if profile["calibrated"] else "未标定"}</p>'
              f'<p>有效时限 = 官方时限 × 倍率。官方 1000 ms 当前为 {math.ceil(1000 * scale)} ms。'
@@ -79,7 +79,7 @@ def route(handler, q, *, post=False):
     body += (f'<form class="card" method="post" action="{html.escape(action_url)}" '
              'onsubmit="return confirm(\'重测会收回本场已公布的成绩，保留旧结果备份。确定？\')">'
              '<input type="hidden" name="action" value="rejudge"><h2>按当前规则重测</h2>'
-             '<p>对 CSP / OI 的最后一次交卷重测。旧版评测成绩不能自动视为已经修正。'
+             '<p>对 OI 的最后一次完整交卷重测。旧版评测成绩不能自动视为已经修正。'
              'IOI 核验留存的计分源码：全部题目重测满分可证明最高分，否则缺完整历史时标记待补资料。'
              '缺源码或原题配置不一致也保留旧分备份；其它可用提交继续重测。</p>'
              f'<select name="c">{options}</select> <button type="submit">重测本场提交</button></form>')

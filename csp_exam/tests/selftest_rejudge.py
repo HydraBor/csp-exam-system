@@ -184,7 +184,7 @@ class Rejudge(unittest.TestCase):
         with patch.object(grading, "_QUEUE_SLOTS"):
             grading.recover_submissions()
         self.assertEqual(self.enqueue.call_args.args[3], saved["submission_exam"])
-        self.assertEqual(saved["judge_rule"]["key"], "CSP")
+        self.assertEqual(saved["judge_rule"]["key"], "OI")
 
     def test_empty_immutable_last_submission_is_valid_zero_not_missing_archive(self):
         sid, _ = submissions.archive(self.cid, self.kh, {})
@@ -206,7 +206,7 @@ class Rejudge(unittest.TestCase):
         entry = store.load_results(self.cid)[self.kh]
         entry.update(submission_id=sid, judge_rule=store.rule_of(store.get_contest(self.cid)))
         store.put_result(self.cid, self.kh, entry)
-        store.update_contest(self.cid, rule="OI")
+        store.update_contest(self.cid, rule="IOI")
         changed, seen = [1000], []
         def judge(*args, **kwargs):
             seen.append((kwargs["time_ms"], kwargs["io_mode"]))
@@ -240,7 +240,7 @@ class Rejudge(unittest.TestCase):
         Publisher()._admin_release()
         self.assertFalse(store.load_exam(self.cid)["released"])
         store.save_exam(self.cid, {**self.exam, "released": False})
-        store.update_contest(self.cid, rule="OI")
+        store.update_contest(self.cid, rule="IOI")
         Publisher()._admin_release()
         self.assertFalse(store.load_exam(self.cid)["released"])
         store.update_contest(self.cid, rule="CSP")

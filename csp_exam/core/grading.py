@@ -605,7 +605,7 @@ def _apply_result(cid: str, kaohao: str, prob_no: int, row: dict, *, best_of: bo
 
 
 def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: str = "") -> bool:
-    """三种赛制共用的判分：交文件夹、逐题判。picked = {题号: 相对路径}。
+    """两种赛制共用的判分：交文件夹、逐题判。picked = {题号: 相对路径}。
 
     原始源码与测试点交给 HydroJudge，编译、执行和答案检查使用上游实现。
     file / stdin 由 HydroJudge 的 filename 配置区分；不注入 freopen。
@@ -613,8 +613,8 @@ def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: st
 
     **赛制差异只在这里分叉**（别再把它们混成一套）：
 
-    * `freopen`（只有 CSP 为真）—— CSP 严格使用 `<英文名>.in/.out` 文件。
-      OI/IOI 用 `stdin` 口径：只喂标准输入，沙箱里**不放**输入文件
+    * `freopen`（OI 为真）—— OI 严格使用 `<英文名>.in/.out` 文件。
+      IOI 用 `stdin` 口径：只喂标准输入，沙箱里**不放**输入文件
       （学生按题面写的就是标准输入输出）。
     * `best_of`（只有 IOI 为真）—— IOI 每题取多次提交的最高分，交一份更差的不该覆盖。
 
@@ -687,7 +687,7 @@ def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: st
             errors = True
             continue
         ext = os.path.splitext(rel)[1]
-        # freopen 提示只对 CSP 有意义（OI/IOI 本来就该用标准输入输出）：
+        # freopen 提示用于 OI 文件读写模式（IOI 使用标准输入输出）：
         # 现在**不改学生代码**了，这条提示纯粹是给老师看日志用的
         hint = wrapper.check_freopen(source.decode("utf-8", "replace"), code) if rule.get("freopen") else ""
         if hint:
@@ -739,7 +739,7 @@ def safe_judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_i
 def graded_text(got: dict, full: int) -> str:
     """判分结果的显示文字：满分→答案正确，中间分→部分正确，0 分才叫答案错误。
 
-    CSP/OI/IOI 都是按测试点给分的，一个通过一半测试点的提交在评测机里的状态
+    OI/IOI 都是按测试点给分的，一个通过一半测试点的提交在评测机里的状态
     仍然是"答案错误"（Hydro 只分 AC/WA），但分数是实打实的部分分——直接照抄
     评测机状态会让学生和老师误解，所以这里按分数重新措辞。
     """

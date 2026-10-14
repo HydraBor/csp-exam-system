@@ -113,8 +113,8 @@ def pick_sources(files: list[str], problems: list, *,
                  ) -> tuple[dict[int, str], list[str]]:
     """从学生上传的文件里找出「每题用哪个代码文件」。
 
-    `strict_layout=True` 的 CSP 入口只采用本考号目录下的 `<英文名>/<英文名>.cpp`，
-    大小写必须一致。以下匹配顺序仅用于没有启用 CSP 目录校验的通用入口。
+    `strict_layout=True` 的 OI 入口只采用本考号目录下的 `<英文名>/<英文名>.cpp`，
+    大小写必须一致。以下匹配顺序仅用于没有启用 OI 目录校验的通用入口。
     不合格文件不会自动改名或搬动；未匹配的题视为没有源码。
 
     通用入口**不退回**整份提交：
@@ -246,7 +246,7 @@ def pick_sources(files: list[str], problems: list, *,
                 notes.append(f"{p} 的大小写与题目英文名 {slug} 不一致"
                              f"（严格模式区分大小写，应为 {slug}/ 与 {slug}.cpp），已忽略")
         if not rejects and strict_layout:
-            notes.append(f"CSP 只采用 {kaohao or '<考号>'}/{slug}/{slug}.cpp，考号、目录、源码名及大小写必须一致，其它位置或扩展名不计分")
+            notes.append(f"OI 只采用 {kaohao or '<考号>'}/{slug}/{slug}.cpp，考号、目录、源码名及大小写必须一致，其它位置或扩展名不计分")
         elif not rejects and strict:
             probe, _ = ladder(free, no, slug, False)      # 只为出提示，不参与判分
             if probe:

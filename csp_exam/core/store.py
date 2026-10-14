@@ -12,7 +12,7 @@
         exam.json                # 本场题目：[{no, pid, title, slug, full}]
         roster.json              # 本场名单：{考号: {name, uname, pw, uid, at}}
         results.json             # 本场成绩：{考号: {problems, total, ...}}
-        uploads/<考号>/          # 收到的代码（CSP 是文件夹结构，OI/IOI 是每题一个文件）
+        uploads/<考号>/          # 不可变的考号文件夹交卷快照
 
 考号是**按场次随机生成**的，格式 `<前缀>-<级别><5 位随机数>`，例如 `GD-S48213`：
 
@@ -24,13 +24,15 @@
 姓名与考号的对应关系存在**每场的 roster.json** 里，而不是全局（老版本的
 students.json 全局考号池只用于迁移，见 `_migrate_roster`）。
 
-三种赛制（rule）——**提交方式统一**：学生交以考号命名的**文件夹**（上传），
+两种赛制（rule）——**提交方式统一**：学生交以考号命名的**文件夹**（上传），
 赛制只决定程序怎么写、怎么计分：
 
-    OI   —— 国内 OI/NOIP 风格：程序用标准输入输出，按**最后一次**提交计分
-    IOI  —— 国际信息学奥赛风格：标准输入输出，每题取**多次提交的最高分**
-    CSP  —— CSP-J/S 复赛风格：按题目英文名分子文件夹，代码必须 freopen
-            读写 <英文名>.in/.out
+    OI   —— 原 CSP 模式：严格考号/英文名/英文名.cpp 目录，程序读写
+            <英文名>.in/.out，按**最后一次完整交卷**计分
+    IOI  —— 标准输入输出，每题取**单次提交总分的历史最高分**
+
+旧的 CSP 赛制名称自动迁为 OI；历史提交的 judge_rule 快照保持原样，
+不能因为菜单改名改变旧提交的读写口径。
 
 **成绩可见性对所有赛制一律相同**：判分照常跑（老师要看成绩），但学生端在老师点
 「公布成绩」之前拿不到任何判定与分数（连"部分正确"都不给），公布后才能在「查成绩」页看到。
@@ -67,32 +69,39 @@ LEVEL_NAMES = {"J": "入门级 J 组", "S": "提高级 S 组"}
 RULES = {
     "OI": {
         "key": "OI", "name": "OI 赛制",
-        "best_of": False, "freopen": False,
-        "desc": "国内 OI/NOIP 风格：程序用**标准输入输出**（cin/cout，不需要 freopen），"
-                "成绩按**最后一次**提交计分，全场考试结束且成绩公布后可查看分数。",
+        "best_of": False, "freopen": True,
+        "desc": "按考号/题目英文名/题目英文名.cpp 的严格目录提交；程序读写 "
+                "`<题目英文名>.in` / `<题目英文名>.out`，可使用 freopen。"
+                "按**最后一次完整交卷**计分，缺题记 0；全场考试结束且成绩公布后可查看分数。",
     },
     "IOI": {
         "key": "IOI", "name": "IOI 赛制",
         "best_of": True, "freopen": False,
-        "desc": "国际信息学奥赛风格：程序用**标准输入输出**，"
-                "每题取多次提交的**最高分**；成绩同样在全场考试结束且公布后可见。",
-    },
-    "CSP": {
-        "key": "CSP", "name": "CSP 赛制",
-        "best_of": False, "freopen": True,
-        "desc": "CSP-J/S 复赛风格：代码必须用 freopen 读写 `<题目英文名>.in` / `<题目英文名>.out`；"
-                "文件夹名或 freopen 文件名写错，这题就是 0 分。全场结束后统一公布成绩。",
+        "desc": "程序用**标准输入输出**，每题保留**单次提交总分的历史最高分**；"
+                "成绩同样在全场考试结束且公布后可见。",
     },
 }
-DEFAULT_RULE = "CSP"
+DEFAULT_RULE = "OI"
 
-#: 三种赛制的**提交方式是一样的**：学生交以考号命名的文件夹（上传文件）。
+#: 两种赛制的**提交方式是一样的**：学生交以考号命名的文件夹（上传文件）。
 #: 赛制只影响：程序怎么写（要不要 freopen）、怎么计分。
 SUBMIT_UPLOAD_NOTE = "交以考号命名的文件夹（上传文件）"
 
 
+def normalize_rule(value: str | None) -> str:
+    """CSP 仅作旧数据/旧客户端别名，不再作为第三种赛制提供。"""
+    return value if value in RULES else DEFAULT_RULE
+
+
 def rule_of(contest: dict) -> dict:
-    return RULES.get((contest or {}).get("rule") or DEFAULT_RULE, RULES[DEFAULT_RULE])
+    return RULES[normalize_rule((contest or {}).get("rule"))]
+
+
+def rule_signature(rule: dict) -> tuple[bool, bool]:
+    """比较实际计分与读写规则，保留旧快照的显式值，不按新名称覆盖。"""
+    defaults = rule_of({"rule": rule.get("key")})
+    return (bool(rule.get("best_of", defaults["best_of"])),
+            bool(rule.get("freopen", defaults["freopen"])))
 
 
 def level_of(contest: dict) -> str:
@@ -351,13 +360,22 @@ def _migrate_if_needed() -> None:
 
 def list_contests() -> list[dict]:
     _migrate_if_needed()
-    items = _load(_index_path(), list)
-    return items if isinstance(items, list) else []
+    with _LOCK:
+        items = _load(_index_path(), list)
+        if not isinstance(items, list):
+            return []
+        # 仅改赛制名；不触碰题目、考号、个人计时、成绩和提交规则快照。
+        if any(c.get("rule") == "CSP" for c in items):
+            for c in items:
+                if c.get("rule") == "CSP":
+                    c["rule"] = "OI"
+            _save(_index_path(), items)
+        return items
 
 
 def save_contests(items: list[dict]) -> None:
     with _LOCK:
-        _save(_index_path(), items)
+        _save(_index_path(), [dict(c, rule=normalize_rule(c.get("rule"))) for c in items])
 
 
 def get_contest(cid: str) -> dict | None:
@@ -396,7 +414,7 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
         contest = {
             "id": f"c{n}",
             "title": title.strip() or f"比赛 {n}",
-            "rule": rule if rule in RULES else DEFAULT_RULE,
+            "rule": normalize_rule(rule),
             "open": True, "released": False, "prefix": prefix,
             "level": lv,
             "exam_mode": exam_mode,
@@ -417,6 +435,8 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
 
 
 def update_contest(cid: str, **fields) -> dict | None:
+    if "rule" in fields:
+        fields["rule"] = normalize_rule(fields["rule"])
     with _LOCK:
         items = list_contests()
         for c in items:
@@ -860,7 +880,7 @@ def set_released(cid: str, released: bool) -> None:
             raise ValueError("仍有提交未评测完成或需要重测，暂不能公布成绩。")
         if released and any((r.get("submission_exam") is not None and
                 grading_problems(r["submission_exam"]) != grading_problems(exam)) or
-                (r.get("judge_rule") and r["judge_rule"].get("key") != rule_of(contest)["key"])
+                (r.get("judge_rule") and rule_signature(r["judge_rule"]) != rule_signature(rule_of(contest)))
                 for r in results):
             raise ValueError("成绩对应的题目或赛制已改变，请重测后再公布。")
         exam["released"] = bool(released)

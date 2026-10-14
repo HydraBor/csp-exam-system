@@ -1,6 +1,7 @@
 """完整 HTTP 交卷流程，独立端口和临时比赛，不改变生产成绩。"""
 
 import http.client
+import io
 from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import zipfile
 from unittest.mock import patch
 
 from csp_exam.tests.live_hydro_fixture import live_hydro_fixture
@@ -25,7 +27,7 @@ def main():
             patch.object(judgelocal, "PROBLEMS_DIR", str(Path(tmp) / "problems")):
         cid, kh = "http_test", "GD-S12345"
         prob = {"no": 1, "pid": "P", "name": "candy", "full": 100}
-        store._save(store._path("contests.json"), [{"id": cid, "title": "HTTP 验收", "rule": "CSP", "open": True, "start_at": int(time.time())-600, "end_at": int(time.time())+3600}])
+        store._save(store._path("contests.json"), [{"id": cid, "title": "HTTP 验收", "rule": "OI", "open": True, "start_at": int(time.time())-600, "end_at": int(time.time())+3600}])
         store.save_exam(cid, {"problems": [prob], "released": False})
         store._save(store._path("contests", cid, "roster.json"), {kh: {"name": "测试学生"}})
         problems.save_problem_info({"P": {"time_ms": 1000, "memory_mb": 512}})
@@ -50,6 +52,15 @@ def main():
             body += f"--{boundary}--\r\n".encode()
             return request("POST", "/upload?c=" + cid, body, cookie=student,
                            ctype="multipart/form-data; boundary=" + boundary)
+        def upload_zip(files):
+            packed = io.BytesIO()
+            with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for name, contents in files: archive.writestr(name, contents)
+            boundary = 'OIZipBoundary'
+            body = (f'--{boundary}\r\nContent-Disposition: form-data; name="zipfile"; filename="answer.zip"\r\n'
+                    'Content-Type: application/zip\r\n\r\n').encode() + packed.getvalue() + f'\r\n--{boundary}--\r\n'.encode()
+            return request('POST', '/upload?c=' + cid, body, cookie=student,
+                           ctype='multipart/form-data; boundary=' + boundary)
         def wait():
             deadline = time.monotonic() + 40
             while time.monotonic() < deadline:
@@ -66,13 +77,23 @@ def main():
             check("教师可保存倍率", status == 200)
             src = b'#include <cstdio>\nint main(){freopen("candy.in","r",stdin);freopen("candy.out","w",stdout);int a,b;scanf("%d %d",&a,&b);printf("%d\\n",a+b);return 0;}'
             status, _ = upload([(kh + "/candy/candy.cpp", src)])
-            check("CSP 目录交卷接收", status == 200)
+            check("OI 严格目录交卷接收", status == 200)
             result = wait()
             check("正确交卷满分及倍率", result["total"] == 100 and result["problems"]["T1"]["effective_time_ms"] == 1500)
+            stdio = b'#include <cstdio>\nint main(){int a,b;if(scanf("%d%d",&a,&b)==2)printf("%d\\n",a+b);}'
+            status, _ = upload([(kh + '/candy/candy.cpp', stdio)])
+            check('OI 不使用指定文件读写仍收到回执', status == 200)
+            check('OI 标准输出不能替代指定答案文件', wait()['total'] == 0)
+            status, _ = upload([(kh + '/candy/candy.cpp', src.replace(b'candy.in', b'wrong.in').replace(b'candy.out', b'wrong.out'))])
+            check('OI 错误读写文件名仍收到回执', status == 200)
+            check('OI 错误读写文件名不计分', wait()['total'] == 0)
+            status, data = upload_zip([(kh + '/candy/candy.cpp', src), (kh + '/测试学生.txt', '测试学生'.encode())])
+            check('OI ZIP 严格目录及中文 TXT 接收', status == 200 and '测试学生.txt'.encode() in data)
+            check('OI ZIP 正确文件读写满分', wait()['total'] == 100)
             _, data = request("GET", "/api/scoreboard?c=" + cid)
             check("未公布时 JSON 无成绩", "rows" not in json.loads(data))
             _, data = request("GET", "/api/scoreboard?c=" + cid + "&private=1", cookie=admin)
-            check("教师可预览 CSP 分数", json.loads(data)["rows"][0]["total"] == 100)
+            check("教师可预览 OI 分数", json.loads(data)["rows"][0]["total"] == 100)
             status, _ = upload([("../escape.cpp", src)])
             check("HTTP 路径穿越拒绝", status == 400)
             status, _ = upload([("candy/candy.cpp", src), ("candy/candy.cpp", src)])

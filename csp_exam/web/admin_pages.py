@@ -817,7 +817,7 @@ def _test_modal() -> str:
 <p class="muted" style="margin-top:0">
   用这份代码跑一遍这道题的<b>全部测试点</b>，看数据、时限、内存设置有没有问题。
 </p>
-<label>评测规则 <select id="test-io"><option value="file">CSP：文件输入输出（默认）</option><option value="stdin">OI / IOI：标准输入输出</option></select></label>
+<label>评测规则 <select id="test-io"><option value="file">OI：文件输入输出（默认）</option><option value="stdin">IOI：标准输入输出</option></select></label>
 <div class="codebox-bar">
   <span><span class="ok">✓</span> <span id="test-file">标程.cpp</span> · <span id="test-count">—</span></span>
   <span class="muted" id="test-note"></span>
@@ -847,7 +847,7 @@ def _view_modal() -> str:
     body = """
 <div class="card">
   <p class="muted" style="margin-top:0">考号 <b>GD-S00001</b>（示例学生） · 返回比赛 · 下载大样例 · 退出</p>
-  <p><span class="tag tag-csp">CSP 赛制</span> <span class="tag tag-level">提高级 S 组</span></p>
+  <p><span class="tag tag-oi">OI 赛制</span> <span class="tag tag-level">提高级 S 组</span></p>
   <h2 id="pv-head"></h2>
   <div class="card stmt" id="pv-body"></div>
 </div>
@@ -3121,7 +3121,7 @@ window.addEventListener('hashchange',openLinkedSource);
             return
         io_mode = form.get("io_mode", "file")
         if io_mode not in ("file", "stdin"):
-            return self._json({"ok": False, "error": "请选择 CSP 文件输入输出或 OI 标准输入输出"}, 400)
+            return self._json({"ok": False, "error": "请选择 OI 文件输入输出或 IOI 标准输入输出"}, 400)
         ok, err, row = self._submit_as_admin(pid, source, io_mode=io_mode)
         if not ok:
             self._json({"ok": False, "error": err}, 200)

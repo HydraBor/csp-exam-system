@@ -2,20 +2,20 @@
 
 页面只做「取数据、套模板」：赛制、级别、时长、题目英文名这些规则都在 core/
 （`store.rule_of` / `duration_of` / `level_name` / `code_of` / `SUBMIT_UPLOAD_NOTE` …），
-这里不另立规则。三种赛制的提交方式**已经统一成"交考号文件夹"**，
+这里不另立规则。两种赛制的提交方式**已经统一成"交考号文件夹"**，
 所以提交区只有一套，不再按赛制分叉。
 
 **零反馈是唯一行为**：判分照常跑（老师要看成绩），但老师「公布成绩」
 （`exam["released"]`）之前，学生端看不到任何判定、分数、逐点状态 —— 连"部分正确"这种
-状态都不给，也不提"正在判分"；公布之后才显示分数。三种赛制一视同仁。
+状态都不给，也不提"正在判分"；公布之后才显示分数。两种赛制一视同仁。
 （以前还有赛制自带的 `feedback` 与本场 `feedback_mode` 两层开关，已按需求整段删掉。）
 
 本轮（T-08）改动：
   * 比赛页：倒计时 + 级别徽章；题目表列「题目英文名」（学生用它建文件夹、
     命名源文件、写 freopen；`T00001` 那种**题目编号**只在老师界面出现）；
     删掉题目提交状态卡片、
-    交卷前检查清单、我的成绩；提交区统一上传文件夹（CSP 附广东目录结构与命名红线，
-    OI/IOI 说明用标准输入输出）
+    交卷前检查清单、我的成绩；提交区统一上传文件夹（OI 附广东目录结构与命名红线，
+    IOI 说明用标准输入输出）
   * 题面页：不再出现「本题的读写文件与提交方式」（要求都写在考生须知里）
   * 交卷回执：改成**文件结构检查清单**（文件名、目录位置、个人信息文件、大小写）
   * 新增考生须知 `GET /help?c=<比赛id>`；删掉「我的提交」页（`_result_page` 与 `/result`）
@@ -257,7 +257,7 @@ class StudentPages:
             return
         rows = []
         for c, entry, res in contests:
-            # 公布成绩之前只说交没交；公布之后才给分数（三种赛制一视同仁）
+            # 公布成绩之前只说交没交；公布之后才给分数（两种赛制一视同仁）
             state = "已提交" if res else "未提交"
             if res and contest_time.phase(c) == "ended" and store.load_exam(c["id"]).get("released"):
                 state = f"{store.entry_total(res, c['id'])} 分"
@@ -421,9 +421,9 @@ class StudentPages:
                 f'{want}<span class="muted">（这个文件不计分，但广东考区要求必须有）</span></div>')
 
     def _submit_block(self, exam: dict, contest: dict, cid: str, kaohao: str, name: str) -> str:
-        """提交区：三种赛制**统一**交考号文件夹（上传文件夹或 zip），不再有逐题提交按钮。
+        """提交区：两种赛制**统一**交考号文件夹（上传文件夹或 zip），不再有逐题提交按钮。
 
-        赛制差异只剩「程序怎么写」：CSP 要 freopen 读写编号文件，OI/IOI 用标准输入输出。
+        赛制差异只剩「程序怎么写」：OI 读写英文名.in/.out，IOI 用标准输入输出。
 
         比赛时间窗口之外不显示上传表单；服务端独立校验同一个时间窗口。
         """
@@ -446,7 +446,7 @@ class StudentPages:
                 f'<div class="flash flash-info" style="margin-top:10px">'
                 f'<b>本场是 {html.escape(rule["name"])}，用标准输入输出</b>：程序里用 '
                 f'<code>cin</code>/<code>scanf</code> 读、<code>cout</code>/<code>printf</code> 写，'
-                f'<b>不需要 freopen</b>（那是 CSP 赛制的要求）。文件夹只是用来区分每题的文件。'
+                f'<b>不需要 freopen</b>。文件夹用于整理每题的源文件。'
                 f'</div>')
             parts.append(self._person_card(name))
         parts.append(f"""<form method="post" action="/upload?c={q}" enctype="multipart/form-data"
@@ -477,7 +477,7 @@ class StudentPages:
 <p class="mt-3 mb-0 text-secondary" role="status" aria-live="polite" data-upload-status>尚未选择文件。选择内容后再提交。</p>
 <div class="border-top mt-4 pt-3 d-flex flex-wrap align-items-center gap-3">
   <button type="submit" class="btn btn-primary" data-upload-submit disabled>提交我的代码</button>
-  <span class="text-secondary small">可以重新选择并提交，以最后一次提交为准。提交后请核对回执。</span>
+  <span class="text-secondary small">{'每题保留历史最高分。' if rule.get('best_of') else '每次上传完整目录，以最后一次完整交卷计分，缺题记 0。'}提交后请核对回执。</span>
 </div>
 <noscript><p class="text-danger mt-3">请启用 JavaScript 后使用统一提交区。</p></noscript>
 </form>
@@ -686,7 +686,7 @@ class StudentPages:
 
     def _submit_page(self, kaohao: str, contest: dict, cid: str, pno: str,
                      flash: str = "", code: str = "", lang: str = ""):
-        """历史入口（网页粘贴代码）。三种赛制现在统一交考号文件夹，这里直接回比赛页。"""
+        """历史入口（网页粘贴代码）。两种赛制现在统一交考号文件夹，这里直接回比赛页。"""
         self._redirect(f"/hall?c={urllib.parse.quote(cid)}")
 
     def _do_submit_code(self):
@@ -852,7 +852,7 @@ class StudentPages:
         exam = store.load_exam(cid)
         # 会话属于本场时，用会话里的考号做导航（原型的查成绩页也是这样）
         me = self._student(cid) or kaohao_input.strip().upper()
-        # 零反馈：老师公布成绩之前一律不给分数（三种赛制一视同仁）
+        # 零反馈：老师公布成绩之前一律不给分数（两种赛制一视同仁）
         if contest_time.phase(contest) != "ended" or not exam.get("released"):
             self._send(page("查成绩", self._flash("info", "成绩还没有公布，请等待全场统一开放。") +
                             f'<p><a class="btn" href="/hall?c={cid}">返回比赛</a></p>'))

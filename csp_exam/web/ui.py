@@ -261,7 +261,7 @@ def render_upload_tree(base: str, notes: dict[str, str] | None = None) -> tuple[
 
 def rule_badge(contest: dict) -> str:
     rule = store.rule_of(contest)
-    cls = {"OI": "tag-oi", "IOI": "tag-ioi", "CSP": "tag-csp"}.get(rule["key"], "")
+    cls = {"OI": "tag-oi", "IOI": "tag-ioi"}.get(rule["key"], "")
     return f'<span class="tag {cls}">{html.escape(rule["name"])}</span>'
 
 
@@ -278,14 +278,12 @@ def rule_tip(contest: dict) -> str:
     文件夹名、源文件名、freopen 的文件名三处都用它。学生侧不出现「题目编号」
     （`T00001` 那种 —— 那是老师定位题目用的）。
 
-    成绩可见性三种赛制一致（赛后老师公布），所以提示里只说赛制本身的差异。
+    成绩可见性两种赛制一致，所以提示里只说赛制本身的差异。
     """
     rule = store.rule_of(contest)
     return {
-        "OI": "赛中不看分数 · 按最后一次提交计分 · 赛后公布",
-        "IOI": "赛中不看分数 · 每题取最高分 · 赛后公布",
-        "CSP": "交以考号命名的文件夹 · 代码用 freopen 读写"
-               "「题目英文名.in / 题目英文名.out」 · 赛中不看分",
+        "OI": "严格考号目录 · 文件读写：题目英文名.in / 题目英文名.out · 最后一次完整交卷计分 · 赛中不看分",
+        "IOI": "标准输入输出 · 每题取最高分 · 赛中不看分 · 赛后公布",
     }.get(rule["key"], "")
 
 
