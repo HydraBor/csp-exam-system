@@ -94,7 +94,7 @@ class StudentPages:
         q = urllib.parse.quote(cid)
         personal = contest_time.student_window(contest, kaohao)
         flexible = contest_time.flexible(contest)
-        wait_note = ("开放后请点击“开始考试”，点击时才开始个人计时。" if flexible
+        wait_note = ("你已登录，个人计时尚未开始。开放后阅读考试说明并点击“确认开始考试”，才开始计时。" if flexible
                      else "你已进入候考区，开考后将自动进入考试。")
         name = store.student_name(cid, kaohao) if kaohao else ""
         action = (f'<a class="btn btn-sm btn-outline-secondary" href="/logout?c={q}">退出登录</a>'
@@ -115,12 +115,11 @@ class StudentPages:
                      '<p id="wait-status" class="text-secondary mb-0" role="status">'
                      f'{wait_note}</p></div>')
         elif state == "ready":
-            button = (f'<form method="post" action="/start?c={q}"><button class="btn btn-primary" type="submit">开始考试</button></form>'
-                      if kaohao else f'<a class="btn btn-primary" href="/enter?c={q}">凭考号登录开考</a>')
             body += ('<div class="card card-body text-center p-4 p-md-5 mb-4">'
-                     '<div class="h2 mb-3">现在可以开始考试</div>'
-                     f'<p id="wait-status" class="text-secondary" role="status">点击后立即开始 {_dur_text(store.duration_of(contest))} 的个人计时。'
-                     '退出、断网和刷新均不会暂停或重新计时。</p>' + button + '</div>')
+                     '<div class="h2 mb-3">请先阅读考试说明</div>'
+                     '<p id="wait-status" class="text-secondary mb-0" role="status">登录和阅读本页不会开始计时。'
+                     f'准备好后点击下方“确认开始考试”，才进入考试并开始 {_dur_text(store.duration_of(contest))} 的个人计时。'
+                     '退出、断网和刷新均不会暂停或重新计时。</p></div>')
         else:
             note = "请等待老师设置考试时间，页面会自动更新。" if state == "unscheduled" else "本场考试已结束，不能再提交或修改代码。"
             if flexible and state == "ended":
@@ -136,7 +135,7 @@ class StudentPages:
         if flexible:
             info = [("组别", level_badge(contest)), ("赛制", rule_badge(contest)),
                     ("考试模式", "自主开考"),
-                    ("允许开考（北京时间）", html.escape(contest_time.display(start) + " 至 " + contest_time.display(end))),
+                    ("可开始考试的时间（北京时间）", html.escape(contest_time.display(start) + " 至 " + contest_time.display(end))),
                     ("个人考试时长", _dur_text(store.duration_of(contest))),
                     ("成绩统一开放", html.escape(contest_time.display(contest_time.finish_at(contest))) + " 后，评测完成时开放")]
             from ..core import attempts
@@ -147,6 +146,21 @@ class StudentPages:
         body += ('<div class="card card-body p-4 mb-4"><div class="datagrid">' +
                  ''.join(f'<div class="datagrid-item"><div class="datagrid-title">{label}</div>'
                          f'<div class="datagrid-content">{value}</div></div>' for label, value in info) + '</div></div>')
+        if flexible and kaohao and state in ("pending", "ready"):
+            exam = store.load_exam(cid)
+            notice = str(exam.get("notice") or "").strip()
+            if notice:
+                body += ('<div class="card card-body p-4 mb-4"><h2 class="h3 mb-3">本场考试说明</h2>'
+                         '<div class="problem-content">' + md_to_html(notice) + '</div></div>')
+            body += ('<div class="card card-body p-4 mb-4"><h2 class="h3 mb-3">开考前请确认</h2>'
+                     '<ul class="mb-0"><li>点击确认后立即开始计时，请准备好连续作答所需的电脑、网络和编译环境。</li>'
+                     '<li>每个考号只有一次考试机会，退出或断网后可重新登录，截止时间不会改变。</li>'
+                     '<li>个人考试结束后，仍须等待全场统一公布成绩；赛中不显示分数或排行榜。</li></ul></div>')
+        if state == "ready":
+            button = (f'<form method="post" action="/start?c={q}" data-submit-guard>'
+                      '<button class="btn btn-primary" type="submit">确认开始考试</button></form>'
+                      if kaohao else f'<a class="btn btn-primary" href="/enter?c={q}">凭考号登录并阅读说明</a>')
+            body += '<div class="d-flex justify-content-center mb-4">' + button + '</div>'
         if state == "ended" and contest_time.phase(contest) == "ended" and store.load_exam(cid).get("released"):
             body += (f'<div class="d-flex gap-2 mb-3"><a class="btn btn-primary" href="/score?c={q}">查看已公布成绩</a>'
                      f'<a class="btn btn-outline-secondary" href="/scoreboard?c={q}">排行榜</a></div>')
@@ -166,12 +180,12 @@ class StudentPages:
 {self._flash('err', error) if error else ''}
 <div class="card">
 {head}
-{('<p class="text-secondary">允许开考时间段内首次成功登录即开始个人计时；提前登录先进入候考区。退出、断网和刷新不会暂停或重置计时。</p>' if contest_time.flexible(contest) else '')}
+{('<p class="text-secondary">登录后先阅读考试说明。点击“确认开始考试”才开始个人计时；提前登录可等待倒计时结束。考试开始后退出、断网和刷新不会暂停或重置计时。</p>' if contest_time.flexible(contest) else '')}
 <form method="post" action="/enter">
 {f'<input type="hidden" name="c" value="{html.escape(cid)}">' if cid else ''}
 <input type="text" name="kaohao" placeholder="考号（如 GD-S48213）" autofocus
        style="font-size:18px;letter-spacing:1px">
-<p style="margin-top:14px"><button type="submit">进入考试</button></p>
+<p style="margin-top:14px"><button type="submit">{'登录并查看考试说明' if contest_time.flexible(contest) else '进入考试'}</button></p>
 </form>
 <p class="muted">考号形如 <code>GD-S48213</code>：中间的短横是 <code>-</code>（不是 <code>_</code>），
 字母要大写；数字是纯随机分配的，不用记规律。</p>
@@ -216,11 +230,8 @@ class StudentPages:
         self._enter_authenticated(c, kaohao)
 
     def _enter_authenticated(self, contest, kaohao):
-        # A deliberate successful login within the opening window starts at once.
-        # Logging in before it only authenticates the waiting page.
-        from ..core import attempts
-        if contest_time.flexible(contest) and contest_time.student_phase(contest, kaohao) == "ready":
-            attempts.start(contest["id"], kaohao)
+        # Authentication never grants a personal clock. Only POST /start does;
+        # existing clocks are resumed unchanged by the shared hall resource gate.
         self._redirect(f"/hall?c={urllib.parse.quote(contest['id'])}",
                        cookie=f"csp={make_cookie(contest['id'], kaohao)}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax")
 
@@ -435,7 +446,7 @@ class StudentPages:
         q = urllib.parse.quote(cid)
         parts = ['<h2>提交代码</h2><div class="card">']
         if rule.get("freopen"):
-            parts.append('<details class="mb-4"><summary class="fw-semibold cursor-pointer">查看目录规范与个人信息要求</summary><div class="mt-3">')
+            parts.append('<details class="mb-4" open><summary class="fw-semibold cursor-pointer">目录规范与个人信息要求</summary><div class="mt-3">')
             parts.append(self._dir_tree(exam, kaohao, name))
             parts.append(self._person_card(name))
             parts.append(self._rule_warn(kaohao, exam))

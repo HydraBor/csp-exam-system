@@ -52,8 +52,12 @@ class FlexibleHTTP(unittest.TestCase):
             self.assertEqual(attempts.get(self.cid, self.kh)['end_at'], self.start + 1800)
 
     def test_late_login_has_full_duration_and_reconnect_never_resets_it(self):
-        with self.at(self.close - .25):
+        with self.at(self.close - 60):
             self.assertEqual(self.login()[0], 302)
+            self.assertIsNone(attempts.get(self.cid, self.kh))
+            self.assertIn('确认开始考试', self.request('/hall')[2])
+        with self.at(self.close - .25):
+            self.assertEqual(self.request('/start', 'POST', b'')[0], 302)
             clock = attempts.get(self.cid, self.kh)
         self.assertEqual(clock['end_at'] - clock['start_at'], 1800)
         with self.at(self.close + 600):
@@ -70,6 +74,39 @@ class FlexibleHTTP(unittest.TestCase):
             self.assertNotIn('secret_slug', self.request('/hall')[2])
             self.assertEqual(self.request('/upload', 'POST', b'')[0], 403)
             self.assertEqual(attempts.get(self.cid, self.kh), clock)
+
+    def test_login_reading_polling_and_refresh_do_not_create_personal_clock(self):
+        store.save_exam(self.cid, {**store.load_exam(self.cid), 'notice': '## 比赛说明\n\n请先检查电脑和网络。'})
+        with self.at(self.start + 20):
+            self.assertIn('登录并查看考试说明', self.request('/enter', cookie='')[2])
+            self.assertEqual(self.login()[0], 302)
+            text = self.request('/hall')[2]
+            self.assertIn('请先检查电脑和网络', text)
+            self.assertLess(text.index('请先检查电脑和网络'), text.index('action="/start?'))
+            self.assertIn('登录和阅读本页不会开始计时', text)
+            self.assertNotIn('secret_slug', text)
+            self.assertIsNone(attempts.get(self.cid, self.kh))
+            for _ in range(3):
+                self.assertEqual(json.loads(self.request('/api/contest-state')[2])['phase'], 'ready')
+                self.assertEqual(self.request('/hall')[0], 200)
+            self.assertEqual(self.request('/start')[0], 404)
+            for route in ('/problem?p=1', '/sample?p=1', '/file?f=a.cpp', '/submit'):
+                self.assertEqual(self.request(route)[0], 403, route)
+            self.assertEqual(self.request('/upload', 'POST', b'')[0], 403)
+            self.assertIsNone(attempts.get(self.cid, self.kh))
+        with self.at(self.start + 200):
+            self.assertEqual(self.request('/start', 'POST', b'')[0], 302)
+            self.assertEqual(attempts.get(self.cid, self.kh)['start_at'], self.start + 200)
+            self.assertEqual(attempts.get(self.cid, self.kh)['end_at'], self.start + 200 + 1800)
+
+    def test_window_closes_while_student_reads_then_first_click_is_rejected(self):
+        with self.at(self.close - 1):
+            self.assertEqual(self.login()[0], 302)
+            self.assertIsNone(attempts.get(self.cid, self.kh))
+        with self.at(self.close):
+            self.assertEqual(self.request('/start', 'POST', b'')[0], 403)
+            self.assertIsNone(attempts.get(self.cid, self.kh))
+            self.assertNotIn('secret_slug', self.request('/hall')[2])
 
     def test_exact_window_end_rejects_first_start_and_invalid_sessions(self):
         with self.at(self.close):

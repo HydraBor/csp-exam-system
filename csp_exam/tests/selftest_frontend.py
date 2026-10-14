@@ -154,6 +154,7 @@ console.log(JSON.stringify(calls));'''.replace('INPUT', json.dumps({
         self.assertIn('number.cpp',rendered)
         self.assertIn('学生甲.txt',rendered)
         self.assertIn('/static/submission.js',rendered)
+        self.assertIn('<details class="mb-4" open>',rendered)
         with patch.object(contest_time,'phase',return_value='ended'):
             closed = handler._submit_block(exam, {'rule':'CSP'}, 'c1', 'GD-J12345', '学生甲')
         self.assertNotIn('<form',closed)
