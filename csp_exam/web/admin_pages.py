@@ -1597,17 +1597,20 @@ class AdminPages:
         if roster:
             options = ''.join(
                 f'<option value="{html.escape(r["kaohao"], quote=True)}" '
+                f'data-name="{html.escape(r["name"], quote=True)}" '
                 f'data-campus="{html.escape(r["campus"], quote=True)}" data-teacher="{html.escape(r["teacher"], quote=True)}">'
                 f'{html.escape(r["name"])} · {html.escape(r["campus"] or "未填写校区")} · '
                 f'{html.escape(r["teacher"] or "未填写指导老师")} · {html.escape(r["kaohao"])}</option>'
                 for r in roster)
             body += f'''<details class="card card-body mt-3" id="affiliation-correction">
 <summary class="fw-semibold">更正本场学生归属</summary>
-<p class="text-secondary small mt-3">只修改本场校区和指导老师，考号、计时、提交和成绩保留；不会更改原分组或其他比赛。</p>
+<p class="text-secondary small mt-3">可更正本场姓名、校区和指导老师，查询、考号表和排行榜随即更新；考号、计时、提交和成绩保留。不会更改原分组或其他比赛，该学生不再被分组自动同步覆盖。</p>
 <form method="post" action="/admin/roster-affiliation{cid_query(key, cid)}">
 <div class="d-flex flex-wrap gap-3 align-items-end">
   <div class="flex-fill"><label for="affiliation-student">学生与考号</label>
     <select id="affiliation-student" name="kaohao" required>{options}</select></div>
+  <div class="flex-fill"><label for="affiliation-name">姓名</label>
+    <input id="affiliation-name" name="name" required maxlength="100" value="{html.escape(roster[0]['name'], quote=True)}"></div>
   <div class="flex-fill"><label for="affiliation-campus">校区</label>
     <input id="affiliation-campus" name="campus" maxlength="100" value="{html.escape(roster[0]['campus'], quote=True)}"></div>
   <div class="flex-fill"><label for="affiliation-teacher">指导老师</label>
@@ -1617,6 +1620,7 @@ class AdminPages:
 <script>(function(){{
 var s=document.getElementById('affiliation-student');
 s.addEventListener('change',function(){{var o=s.selectedOptions[0];
+document.getElementById('affiliation-name').value=o.dataset.name||'';
 document.getElementById('affiliation-campus').value=o.dataset.campus||'';
 document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
 }})();</script>'''
@@ -1650,7 +1654,13 @@ document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
             return
         cid = q.get("c", "")
         c = store.get_contest(cid)
-        if c and store.delete_contest(cid):
+        try:
+            removed = c and store.delete_contest(cid)
+        except OSError as error:
+            log(f'[管理端] 删除比赛未完成 {cid}：{error}')
+            self._send(page('删除未完成', self._flash('err', f'删除未完成：{error}。请检查存储状态后重试。')), 500)
+            return
+        if removed:
             log(f"[管理端] 删除比赛 {cid} {c['title']}")
             self._redirect(admin_url(q.get('key', ''), msg=f"已删除比赛「{c['title']}」"))
         else:
@@ -1718,7 +1728,7 @@ document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
             return self._json({'ok': False, 'error': '比赛不存在'}, 404)
         form = self._form()
         store.update_roster_affiliation(cid, form.get('kaohao', ''),
-                                        campus=form.get('campus', ''), teacher=form.get('teacher', ''))
+                                        campus=form.get('campus', ''), teacher=form.get('teacher', ''), name=form.get('name'))
         self._redirect(admin_url(q.get('key', ''), cid, '本场归属已更正，考号、计时、提交和成绩保留。'))
 
     def _admin_reshuffle(self):
@@ -1842,7 +1852,7 @@ document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
       <div class="flex-fill"><label for="group-{gid_attr}-teacher">指导老师</label>
         <input id="group-{gid_attr}-teacher" name="teacher" maxlength="100" value="{html.escape(g.get('teacher') or '', quote=True)}"></div>
     </div>
-    <p class="text-secondary small">本组所有学生统一使用上述校区和指导老师；修改后只影响之后的报名，不改变已经导入的比赛名单。</p>
+    <p class="text-secondary small">本组所有学生统一使用上述校区和指导老师。修改名单、校区或老师时，自动同步到尚无人开考、没有提交的关联比赛；已经开考和历史比赛保留报名快照，可在本场单独更正。保留学生的考号不变，新增学生自动分配考号。删除分组不退出已报名的比赛。</p>
     <textarea name="names" style="min-height:120px">{html.escape(chr(10).join(names))}</textarea>
     <p class="mt-3"><button class="btn btn-sm btn-primary" type="submit">保存分组</button></p>
   </details>
@@ -3029,15 +3039,20 @@ window.addEventListener('hashchange',openLinkedSource);
         title = (form.get("title") or "").strip()
         name = (form.get("name") or "").strip()
         statement = form.get("statement") or ""
-        r = localoj.set_problem_statement(pid, statement)
-        if not r.get("ok"):
-            log(f"[管理端] 题目详情：保存题面失败 {pid}：{r.get('error')}")
-            self._redirect(problem_detail_url(key, pid, msg=(
-                f"题面没保存：{r.get('error')}。"
-                f"（题目名 / 时限这些也一起没动，改完再存一次就行。）")))
+        from ..core import database
+        try:
+            with store._LOCK, database.transaction(store.DATA_DIR):
+                r = localoj.set_problem_statement(pid, statement)
+                if not r.get('ok'):
+                    raise ValueError(r.get('error') or '题面保存失败')
+                m = remember_meta(pid, title=title, name=name,
+                                  time_ms=form.get("time_ms"), memory_mb=form.get("memory_mb"))
+                if not m.get('ok'):
+                    raise ValueError(m.get('error') or '题目元信息保存失败')
+        except (ValueError, OSError) as error:
+            log(f'[管理端] 题目详情未保存 {pid}：{error}')
+            self._redirect(problem_detail_url(key, pid, msg=f'本次修改未保存：{error}。题面、元信息及关联比赛均保留原值。'))
             return
-        m = remember_meta(pid, title=title, name=name,
-                          time_ms=form.get("time_ms"), memory_mb=form.get("memory_mb"))
         changed = [x for x in (m.get("changed") or []) if x]
         skipped = [x for x in (m.get("skipped") or []) if x]
         log(f"[管理端] 题目详情保存 {pid}（{title or pid}）：题面 {len(statement)} 字"

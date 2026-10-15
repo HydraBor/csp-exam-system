@@ -49,6 +49,7 @@ import threading
 import time
 
 from ..config import DATA_DIR          # 数据目录由 config 统一指定（部署根/data）
+from . import database
 _LOCK = threading.RLock()
 
 DEFAULT_PREFIX = "GD"     # 考号前缀（省份代码风格）
@@ -236,7 +237,11 @@ def load_groups() -> list[dict]:
 
 def save_groups(items: list[dict]) -> None:
     with _LOCK:
-        _save(_groups_path(), {"items": items})
+        old = _load(_groups_path(), dict)
+        seq = int(old.get('next_id', 1)) if isinstance(old, dict) else 1
+        ids = [int(g['gid'][1:]) + 1 for g in items
+               if re.fullmatch(r'g\d+', str(g.get('gid', '')))]
+        _save(_groups_path(), {"items": items, "next_id": max([seq, *ids])})
 
 
 def get_group(gid: str) -> dict | None:
@@ -278,12 +283,19 @@ def student_identity(student: dict) -> tuple[str, str, str]:
 
 
 def create_group(name: str, names: list[str], *, campus="", teacher="") -> dict:
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         items = load_groups()
         cleaned, _ = clean_names(names)
-        seq = len(items) + 1
+        data = _load(_groups_path(), dict)
+        seq = int(data.get('next_id', 1)) if isinstance(data, dict) else 1
+        # Older installations have no counter: historical references still reserve IDs.
+        used = {g.get('gid') for g in items}
+        for c in list_contests():
+            used.update(c.get('roster_group_ids', []))
+            for row in load_roster(c['id']).values():
+                used.update(row.get('group_ids', []))
         gid = "g" + str(seq)
-        while any(g.get("gid") == gid for g in items):
+        while gid in used:
             seq += 1
             gid = "g" + str(seq)
         g = {"gid": gid, "name": name.strip() or f"分组 {seq}",
@@ -296,11 +308,12 @@ def create_group(name: str, names: list[str], *, campus="", teacher="") -> dict:
 
 def update_group(gid: str, *, name: str | None = None, names: list[str] | None = None,
                  campus: str | None = None, teacher: str | None = None) -> dict | None:
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         items = load_groups()
         for g in items:
             if g.get("gid") != gid:
                 continue
+            previous = dict(g)
             attrs = affiliation(g.get("campus", "") if campus is None else campus,
                                 g.get("teacher", "") if teacher is None else teacher)
             if name is not None:
@@ -311,6 +324,8 @@ def update_group(gid: str, *, name: str | None = None, names: list[str] | None =
             g.update(attrs)
             g["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_groups(items)
+            from .group_sync import sync_group
+            sync_group(g, previous=previous)
             return g
     return None
 
@@ -424,7 +439,7 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
     prefix = normalize_prefix(prefix)
     if exam_mode not in ("fixed", "flexible"):
         raise ValueError("考试模式无效。")
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         items = list_contests()
         n = 1
         while any(c.get("id") == f"c{n}" for c in items):
@@ -458,7 +473,7 @@ def create_contest(title: str, rule: str = DEFAULT_RULE, prefix: str = DEFAULT_P
 def update_contest(cid: str, **fields) -> dict | None:
     if "rule" in fields:
         fields["rule"] = normalize_rule(fields["rule"])
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         items = list_contests()
         for c in items:
             if c.get("id") == cid:
@@ -480,29 +495,9 @@ def update_contest(cid: str, **fields) -> dict | None:
 
 
 def delete_contest(cid: str) -> bool:
-    """删除比赛（连同名册、成绩、提交的代码）。"""
-    import shutil
-
-    with _LOCK:
-        items = list_contests()
-        keep = [c for c in items if c.get("id") != cid]
-        if len(keep) == len(items):
-            return False
-        from .contest_time import phase
-        from . import attempts
-        contest = next(c for c in items if c.get("id") == cid)
-        if phase(contest) == "running" or any(time.time() < a["end_at"] for a in attempts.all_for(cid).values()):
-            raise ValueError("比赛正在进行，不能删除。")
-        if any(r.get("judging") or r.get("submission_state") in ("queued", "judging")
-               for r in load_results(cid).values()):
-            raise ValueError("本场仍有排队或正在评测的提交，不能删除。")
-        save_contests(keep)
-        from . import database
-        database.delete(DATA_DIR, "contests/" + cid)
-        from . import attempts
-        attempts.delete_contest(cid)
-        shutil.rmtree(os.path.join(DATA_DIR, "contests", cid), ignore_errors=True)
-        return True
+    """Delete owned metadata, clocks, files and obsolete jobs, or report failure."""
+    from .contest_lifecycle import delete
+    return delete(cid)
 
 
 # ------------------------------------------------------------------ 单场比赛的内容
@@ -522,7 +517,7 @@ def grading_problems(exam: dict) -> list:
 
 
 def save_exam(cid: str, exam: dict) -> None:
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         old = load_exam(cid)
         if grading_problems(old) != grading_problems(exam) and load_results(cid):
             exam = dict(exam, released=False)
@@ -633,7 +628,8 @@ def save_roster(cid: str, mapping: dict[str, dict]) -> None:
         for kh in attempts.all_for(cid):
             # Affiliation corrections and group membership never change login,
             # source snapshots, scores or the running student's fixed deadline.
-            metadata = {"campus", "teacher", "group_ids", "group_names"}
+            metadata = {"name", "campus", "teacher", "group_ids", "group_names", "group_sync_exempt",
+                        "group_sync_original_name", "manual_enrollment"}
             fixed = lambda r: {k: v for k, v in (r or {}).items() if k not in metadata}
             if kh not in mapping or fixed(mapping[kh]) != fixed(previous.get(kh)):
                 raise ValueError("已有学生开考，不能删除或重新分配其考号；可以追加新考生。")
@@ -669,8 +665,9 @@ def _random_numbers(count: int, taken: set[int], width: int = DEFAULT_WIDTH) -> 
     纯随机之后号码与姓名、名单顺序、机位、上一场全都无关。
     """
     hi = 10 ** width - 1
-    if count > hi:
-        raise ValueError(f"人数（{count}）超过考号容量（{hi}），请加长位宽")
+    remaining = hi - sum(1 for n in taken if 1 <= n <= hi)
+    if count > remaining:
+        raise ValueError(f"新增人数（{count}）超过剩余考号容量（{remaining}），请加长位宽")
     nums: list[int] = []
     while len(nums) < count:
         n = _RNG.randint(1, hi)
@@ -681,39 +678,24 @@ def _random_numbers(count: int, taken: set[int], width: int = DEFAULT_WIDTH) -> 
     return nums
 
 
-#: 名单条目多久算「陈年」，可以被新的随机号覆盖（天）
-STALE_DAYS = 15
-
-
-def _entry_age_days(entry: dict) -> float:
-    """名单条目距今多少天（读 `at` 时间戳；读不出来就当作很新，不去覆盖别人的号）。"""
-    at = str((entry or {}).get("at") or "").strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            t = time.strptime(at, fmt)
-            return (time.time() - time.mktime(t)) / 86400.0
-        except ValueError:
-            continue
-    return 0.0
-
-
-def _taken_numbers(roster: dict, *, stale_days: float = STALE_DAYS) -> set[int]:
-    """本场已被占用的号码。
-
-    **超过 `stale_days` 天没人动的号不算占用** —— 那是很久以前的残留
-    （比如删了比赛又用同一个 id 重建），新学生随机到时可以直接覆盖它；
-    比较新的号则是「有人正在用」，随机到就重取（见 `_random_numbers`）。
-    老格式的号（`GD-0001`）也一并算进来，避免撞车。
-    """
+def _taken_numbers(roster: dict) -> set[int]:
+    """Every current or historical enrollment reserves its number indefinitely."""
     taken = set()
-    for k, v in roster.items():
+    for k in roster:
         _, _, digits = split_kaohao(k)
         if not digits.isdigit():
+            digits = k.rsplit('-', 1)[-1]
+        if not digits.isdigit():
             continue
-        if stale_days > 0 and _entry_age_days(v) > stale_days:
-            continue                      # 陈年残留：可以让新的随机号覆盖
         taken.add(int(digits))
     return taken
+
+
+def group_sources(record):
+    """Keep labels paired with IDs; different groups may have the same name."""
+    raw_ids = [str(v) for v in record.get('group_ids', [])]
+    labels = dict(zip(raw_ids, [str(v) for v in record.get('group_names', [])]))
+    return list(dict.fromkeys(g for g in raw_ids if g)), labels
 
 
 def _enrollments(names, *, campus="", teacher="", group_id="", group_name="") -> list[dict]:
@@ -727,12 +709,16 @@ def _enrollments(names, *, campus="", teacher="", group_id="", group_name="") ->
         attrs = affiliation(entry.get("campus", defaults["campus"]),
                             entry.get("teacher", defaults["teacher"]))
         rec = {"name": name, **attrs}
-        for key in ("group_ids", "group_names"):
-            rec[key] = list(dict.fromkeys(str(v) for v in entry.get(key, []) if v))
-        if group_id and group_id not in rec["group_ids"]:
-            rec["group_ids"].append(group_id)
-        if group_name and group_name not in rec["group_names"]:
-            rec["group_names"].append(group_name)
+        for key in ('manual_enrollment', 'group_sync_exempt', 'group_sync_original_name'):
+            if key in entry:
+                rec[key] = entry[key]
+        ids, labels = group_sources(entry)
+        if group_id:
+            if group_id not in ids:
+                ids.append(group_id)
+            labels[group_id] = group_name
+        rec['group_ids'] = ids
+        rec['group_names'] = [labels.get(g, '') for g in ids]
         identity = student_identity(rec)
         if identity in seen:
             continue
@@ -749,11 +735,10 @@ def assign_kaohaos(cid: str, names: list[str], prefix: str | None = None,
     - 已经在名单里的人保持不变（不会因为再导入一次就换考号）；
     - 新来的拿**纯随机**的 5 位号，与名单顺序无关；
     - 同一场考试里考号互不相同；
-    - **随机到的号如果和别人撞了**：对方是**半个月前**的陈年残留就直接覆盖，
-      是最近还在用的就重新随机（见 `_taken_numbers`）；
+    - 所有既有考号永久避让，不覆盖历史学生；
     - 前缀与级别默认取本场比赛的设置。
     """
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         contest = get_contest(cid) or {}
         prefix = prefix or contest.get("prefix") or DEFAULT_PREFIX
         level = level or level_of(contest)
@@ -767,22 +752,29 @@ def assign_kaohaos(cid: str, names: list[str], prefix: str | None = None,
             if kh is None:
                 fresh.append(student)
             else:
-                for field in ("group_ids", "group_names"):
-                    joined = list(dict.fromkeys(list(roster[kh].get(field, [])) + student[field]))
-                    if joined:
-                        roster[kh][field] = joined
+                ids, labels = group_sources(roster[kh])
+                new_ids, new_labels = group_sources(student)
+                ids = list(dict.fromkeys(ids + new_ids))
+                labels.update({g:v for g,v in new_labels.items() if v})
+                if ids:
+                    roster[kh].update(group_ids=ids, group_names=[labels.get(g, '') for g in ids])
+                if not student['group_ids']:
+                    roster[kh]['manual_enrollment'] = True
         if fresh:
             taken = _taken_numbers(roster)
             nums = _random_numbers(len(fresh), taken, width)
             for student, num in zip(fresh, nums):
                 kaohao = make_kaohao(num, prefix, level, width)
-                # 撞到「最近有人用」的号 → 重新随机；撞到半个月前的残留 → 覆盖它
-                while kaohao in roster and _entry_age_days(roster[kaohao]) <= STALE_DAYS:
+                while kaohao in roster:
                     nums2 = _random_numbers(1, taken, width)
                     kaohao = make_kaohao(nums2[0], prefix, level, width)
                 roster[kaohao] = dict(new_account(cid, kaohao), **student,
                                       at=time.strftime("%Y-%m-%d %H:%M:%S"))
+                if not student['group_ids']:
+                    roster[kaohao]['manual_enrollment'] = True
         save_roster(cid, roster)
+        from .group_sync import remember_links
+        remember_links(cid, cleaned)
         return roster
 
 
@@ -790,7 +782,7 @@ def replace_roster(cid: str, names: list[str], prefix: str | None = None,
                    level: str | None = None, width: int = DEFAULT_WIDTH, *,
                    campus="", teacher="", group_id="", group_name="") -> dict[str, dict]:
     """用这批姓名**重建**本场名单，并重新生成考号（整场重排）。"""
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         from . import attempts
         if load_results(cid) or attempts.all_for(cid):
             raise ValueError("本场已有提交或学生开考，不能重建名单或重排考号；请新建比赛。")
@@ -805,7 +797,11 @@ def replace_roster(cid: str, names: list[str], prefix: str | None = None,
             kaohao = make_kaohao(num, prefix, level, width)
             roster[kaohao] = dict(new_account(cid, kaohao), **student,
                                   at=time.strftime("%Y-%m-%d %H:%M:%S"))
+            if not student['group_ids']:
+                roster[kaohao]['manual_enrollment'] = True
         save_roster(cid, roster)
+        from .group_sync import remember_links
+        remember_links(cid, cleaned, replace=True)
         return roster
 
 
@@ -839,13 +835,20 @@ def roster_detail(cid: str) -> list[dict]:
     return out
 
 
-def update_roster_affiliation(cid: str, kaohao: str, *, campus="", teacher="") -> dict:
+def update_roster_affiliation(cid: str, kaohao: str, *, campus="", teacher="", name=None) -> dict:
     """Correct one contest snapshot, retaining account, source, score and clock."""
     with _LOCK:
         roster = load_roster(cid)
         if kaohao not in roster:
             raise ValueError("本场不存在这个考号。")
         updated = {**roster[kaohao], **affiliation(campus, teacher)}
+        if name is not None:
+            if (not isinstance(name, str) or not name.strip() or len(name.strip()) > 100
+                    or any(ord(c) < 32 or ord(c) == 127 for c in name)):
+                raise ValueError('姓名不能为空、超过100字符或包含控制字符。')
+            updated['name'] = name.strip()
+            updated.setdefault('group_sync_original_name', roster[kaohao].get('name'))
+        updated['group_sync_exempt'] = True
         identity = student_identity(updated)
         if any(k != kaohao and student_identity(v) == identity for k, v in roster.items()):
             raise ValueError("本场已有同姓名、同校区、同指导老师的学生，不能将两名考生改成同一身份。")
@@ -947,7 +950,7 @@ def ranking(cid: str, include_all: bool = False, *, _results: dict | None = None
 def set_released(cid: str, released: bool) -> None:
     """校验与公布在同一把锁中完成，避免与上传或重测竞态。"""
     from .contest_time import phase, window
-    with _LOCK:
+    with _LOCK, database.transaction(DATA_DIR):
         contest = get_contest(cid)
         if not contest:
             raise ValueError("比赛不存在")

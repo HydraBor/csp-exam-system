@@ -24,6 +24,8 @@ def connection():
                 created REAL NOT NULL, ready REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)''')
             with db:
                 yield db
+        except sqlite3.Error as error:
+            raise OSError(f'评测队列存储失败，请稍后重试：{error}') from error
         finally:
             db.close()
 
@@ -64,3 +66,11 @@ def complete(job_id, retry=False, attempts=0):
 def pending():
     with connection() as db:
         return db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]
+
+
+def has_contest_jobs(cid):
+    """Don't create an empty queue merely to inspect an unused contest."""
+    if not (Path(store.DATA_DIR) / 'judge-queue.sqlite3').exists():
+        return False
+    with connection() as db:
+        return db.execute("SELECT 1 FROM jobs WHERE json_extract(payload,'$[0]')=? LIMIT 1", (cid,)).fetchone() is not None

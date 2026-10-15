@@ -936,8 +936,8 @@ def remember_problem(pid: str, *, title: str = "", code: str = "", name: str = "
     pid = str(pid or "").strip()
     if not pid:
         return
-    from . import store
-    with store._LOCK:
+    from . import store, database
+    with store._LOCK, database.transaction(store.DATA_DIR):
         items = load_problem_info()
         previous_title = str((items.get(pid) or {}).get('title') or '')
         previous_name = str((items.get(pid) or {}).get('name') or '')

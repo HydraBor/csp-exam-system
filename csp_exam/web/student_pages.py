@@ -722,6 +722,7 @@ class StudentPages:
             self._contest_status(contest, cid, 403)
             return
         reserved = False
+        snapshot_dir = None
         try:
             files = submissions.clean_files(self._read_upload())
             if not files:
@@ -733,7 +734,8 @@ class StudentPages:
             if not grading.reserve_submission():
                 raise ValueError("服务器存储空间不足，请联系老师。")
             reserved = True
-            with store._LOCK:
+            from ..core import database
+            with store._LOCK, database.transaction(store.DATA_DIR):
                 current = store.get_contest(cid)
                 contest_time.require_student_running(current, kaohao)
                 if kaohao not in store.load_roster(cid):
@@ -746,6 +748,7 @@ class StudentPages:
                     student_name=store.student_name(cid, kaohao), strict=True,
                     strict_layout=store.rule_of(contest).get("freopen", False), kaohao=kaohao)
                 sid, snapshot = submissions.archive(cid, kaohao, files)
+                snapshot_dir = submissions.confined_file(store.upload_dir(cid, kaohao), snapshot)
                 snapshot_picked = {k: f"{snapshot}/{v}" for k, v in picked.items()}
                 result = store.load_results(cid).get(kaohao, {})
                 # IOI 的未知历史最高分不能由一次新交卷消除；补交后仍需重测核验。
@@ -761,9 +764,14 @@ class StudentPages:
                                "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                                "problems": result.get("problems", {})})
                 store.put_result(cid, kaohao, result)
+                # Queue failure must not replace a previously accepted submission.
+                # The worker cannot observe this result until the store lock commits.
+                grading.enqueue_submission(cid, kaohao, snapshot_picked, exam, sid, reserved=True)
             reserved = False
-            grading.enqueue_submission(cid, kaohao, snapshot_picked, exam, sid, reserved=True)
         except (ValueError, OSError) as e:
+            if snapshot_dir:
+                import shutil
+                shutil.rmtree(snapshot_dir)
             if reserved:
                 grading.release_submission()
             self._send(page("提交失败", self._flash("err", str(e))),
