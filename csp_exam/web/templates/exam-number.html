@@ -1,0 +1,32 @@
+<section class="mx-auto" style="max-width:1080px" id="exam-number-search">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div><div class="page-pretitle mb-2">考生服务</div><h1 class="page-title">考号查询</h1></div>
+    <a class="btn btn-outline-secondary btn-sm" href="/enter">返回考试登录</a>
+  </div>
+  <div class="card card-body p-4 mb-4">
+    <p class="text-secondary mb-3">输入完整姓名，再选择校区和指导老师，查看各场考试的考号。</p>
+    <form id="number-search-form" autocomplete="off">
+      <label for="number-name">考生姓名</label>
+      <div class="d-flex gap-2 mb-3">
+        <input id="number-name" class="form-control" type="text" name="name" placeholder="请输入完整姓名" maxlength="100" required autofocus aria-describedby="number-name-help">
+        <button id="number-search-button" class="btn btn-primary flex-shrink-0" type="submit">查询</button>
+      </div>
+      <div class="d-flex flex-wrap gap-3 align-items-end">
+        <div class="flex-fill" style="flex-basis:240px"><label for="number-campus">校区</label>
+          <select id="number-campus" class="form-select" disabled><option value="">请先查询姓名</option></select></div>
+        <div class="flex-fill" style="flex-basis:240px"><label for="number-teacher">指导老师</label>
+          <select id="number-teacher" class="form-select" disabled><option value="">请先查询姓名</option></select></div>
+      </div>
+    </form>
+    <div id="number-name-help" class="text-secondary small mt-3">姓名须完全一致；考号按比赛分别分配。查询和登录不会开始自主考试计时。</div>
+    <div id="number-message" class="text-secondary mt-3" role="status" aria-live="polite"></div>
+  </div>
+  <section id="number-results" hidden aria-labelledby="number-result-title">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <h2 id="number-result-title" class="h3 m-0">考试记录</h2><span id="number-result-count" class="text-secondary"></span>
+    </div>
+    <div id="number-result-list" class="d-grid gap-3"></div>
+  </section>
+  <div class="text-secondary small mt-4">未查到记录或归属信息有误，请联系指导老师核对报名信息。</div>
+  <noscript><div class="alert alert-info mt-3">请启用 JavaScript 后查询考号。</div></noscript>
+</section>

@@ -171,27 +171,29 @@ class StudentPages:
 
     def _login_page(self, error: str = "", contest: dict | None = None, cookie: str = ""):
         cid = (contest or {}).get("id", "")
-        head = (f'<p>本场考试：{rule_badge(contest)} {level_badge(contest)}'
-                f' <b>{html.escape(contest["title"])}</b></p>'
-                if contest else
-                '<p class="muted">请使用老师发给你的<b>考试链接</b>进入；'
-                '也可以直接输入考号（只在一场考试里出现时会自动进入）。</p>')
+        head = ('<div class="subheader mb-2">本场考试</div>'
+                f'<div class="h3 mb-3">{html.escape(contest["title"])}</div>'
+                if contest else '<p class="text-secondary mb-3">输入指导老师发放的考号，进入对应考试。</p>')
+        hint = ('登录不开始个人计时；阅读说明并确认开考后才开始计时。'
+                if contest_time.flexible(contest) else '考试开放时间和提交要求以本场考试说明为准。')
+        example = 'GD-' + store.level_of(contest or {}) + '12345'
         body = f"""
-{self._flash('err', error) if error else ''}
-<div class="card">
+<div class="card card-body p-4">
 {head}
-{('<p class="text-secondary">登录后先阅读考试说明。点击“确认开始考试”才开始个人计时；提前登录可等待倒计时结束。考试开始后退出、断网和刷新不会暂停或重置计时。</p>' if contest_time.flexible(contest) else '')}
+{('<div class="alert alert-danger" role="alert">' + html.escape(error) + '</div>') if error else ''}
 <form method="post" action="/enter">
 {f'<input type="hidden" name="c" value="{html.escape(cid)}">' if cid else ''}
-<input type="text" name="kaohao" placeholder="考号（如 GD-S48213）" autofocus
-       style="font-size:18px;letter-spacing:1px">
-<p style="margin-top:14px"><button type="submit">{'登录并查看考试说明' if contest_time.flexible(contest) else '进入考试'}</button></p>
+<label for="login-number">考号</label>
+<input id="login-number" type="text" name="kaohao" placeholder="如 {example}" autofocus required
+       autocomplete="off" spellcheck="false" autocapitalize="characters" maxlength="64"
+       class="form-control font-monospace" aria-describedby="login-hint">
+<div id="login-hint" class="text-secondary small mt-2 mb-3">{hint}</div>
+<button class="btn btn-primary w-100" type="submit">{'登录并查看考试说明' if contest_time.flexible(contest) else '登录考试'}</button>
 </form>
-<p class="muted">考号形如 <code>GD-S48213</code>：中间的短横是 <code>-</code>（不是 <code>_</code>），
-字母要大写；数字是纯随机分配的，不用记规律。</p>
+<a class="btn btn-outline-secondary w-100 mt-3" href="/exam-number">查询考号</a>
 </div>
-<p class="muted"><a href="/admin">管理端</a></p>"""
-        self._send(page(("考试入口 · " + contest["title"]) if contest else "CSP 训练站 · 考试入口", body, auth=True),
+<p class="text-center text-secondary small mt-3"><a href="/admin">管理员入口</a></p>"""
+        self._send(page('考试登录', body, auth=True),
                    cookie=cookie)
 
     def _do_enter(self):

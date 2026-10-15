@@ -180,7 +180,7 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         cache = ("public, max-age=0, must-revalidate" if safe in
-                 ("exam-components.css", "scoreboard.css", "scoreboard-filters.js", "contest.js", "submission.js", "admin-ui.js", "problem-library.js") else "public, max-age=2592000")
+                 ("exam-components.css", "scoreboard.css", "scoreboard-filters.js", "contest.js", "submission.js", "admin-ui.js", "problem-library.js", "exam-number.js") else "public, max-age=2592000")
         self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(data)
@@ -298,6 +298,12 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
         self._contest_clock = None
         q = self._query()
         path = urllib.parse.urlparse(self.path).path
+
+        if path == "/exam-number":
+            from .exam_numbers import screen
+            return screen(self)
+        if path == "/api/exam-numbers":
+            return self._json({"ok": False, "error": "请在查询页提交完整姓名。"}, 405)
 
         if q.get("c"):
             store.maybe_auto_release(q["c"])
@@ -530,6 +536,9 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
             if not supplied or not matches_secret(supplied, store.admin_key()):
                 return self._json({"error": "请求来源不匹配"}, 403)
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/exam-numbers":
+            from .exam_numbers import search
+            return search(self)
         if path == "/admin/login":
             from .scoreboard import login_route; return login_route(self, self._query(), post=True)
         if path == "/admin/judge":
