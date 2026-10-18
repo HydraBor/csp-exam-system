@@ -50,6 +50,8 @@ def _snapshot(cid: str, contest: dict, *, private: bool) -> dict:
     problems = exam.get("problems") or []
     all_results = store.load_results(cid)
     roster = store.load_roster(cid)
+    from . import public_sources
+    share_sources = not private and public_sources.enabled(contest, exam)
     rows = []
     for ranked in store.ranking(cid, include_all=True, _results=all_results):
         result = all_results.get(ranked["kaohao"]) or {}
@@ -63,6 +65,8 @@ def _snapshot(cid: str, contest: dict, *, private: bool) -> dict:
             row["kaohao"] = ranked["kaohao"]
             row["state"] = ("stale" if "更新" in str(result.get("rejudge_error") or "") else "blocked" if result.get("rejudge_error") else result.get("submission_state") or
                             ("judging" if result.get("judging") else "error" if ranked["pending"] else "done"))
+        elif share_sources and ranked['submitted'] and not ranked['pending']:
+            row['source_id'] = public_sources.student_token(cid, ranked['kaohao'])
         rows.append(row)
     return {"ok": True, "released": True, "published": bool(exam.get("released")),
             "private": private, "title": contest["title"],

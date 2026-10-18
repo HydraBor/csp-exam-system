@@ -1334,6 +1334,14 @@ class AdminPages:
     <button type="submit" class="{'btn-gray' if exam.get('released') else ''}">
       {"收回成绩公布" if exam.get("released") else "公布成绩"}</button></form>
 </p>
+<div class="card card-body mb-3">
+  <form method="post" action="/admin/release{cid_query(key, cid)}" class="d-flex flex-wrap align-items-center gap-3">
+    <input type="hidden" name="public_sources" value="{0 if contest.get('public_sources') else 1}">
+    <span>公开源码与逐点评测：<b>{'已开启' if contest.get('public_sources') else '未开启'}</b></span>
+    <button class="btn btn-sm btn-outline-secondary" type="submit">{'关闭源码公开' if contest.get('public_sources') else '开启源码公开'}</button>
+    <span class="text-secondary small">整场结束且成绩公布后开放判分代码及逐点判定、得分、用时和内存。</span>
+  </form>
+</div>
 
 <!-- 整个页面只有底部一个「保存」按钮：本场设置 + 名单 + 题目 三个区域在同一个表单里，
      点一次一起提交。上面的公布成绩按钮是立即生效的动作，
@@ -2109,6 +2117,12 @@ document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
             return
         if "open" in form:
             raise ValueError("比赛按设置的开始、结束时间控制，请在本场设置中修改时间。")
+        if 'public_sources' in form:
+            if form['public_sources'] not in ('0', '1'):
+                raise ValueError('源码公开设置无效。')
+            store.update_contest(cid, public_sources=form['public_sources'] == '1')
+            self._redirect(admin_url(q.get('key', ''), cid, '源码公开设置已更新，整场结束且成绩公布后生效。'))
+            return
         if form.get("action") == "save_all":
             self._admin_save_all(cid, contest, form, q.get("key", ""))
             return

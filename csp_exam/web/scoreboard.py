@@ -77,6 +77,9 @@ def login_route(handler, q, *, post=False):
 
 def route(handler, q, path):
     from ..core import scoreboard
+    if path == '/scoreboard' and 'source' in q:
+        from .public_sources import route as source_route
+        return source_route(handler, q)
     # 条件请求必须在鉴权与公开开关检查之后，不能复用老师的响应。
     teacher = handler._check_admin(q.get("key", ""))
     # 学生页面始终使用公开投影；同一浏览器的管理员 cookie 不能自动升级它。
@@ -120,9 +123,13 @@ def _rows(cid: str, state: dict, private: bool, key: str) -> str:
     for row in state.get("rows", []):
         name = html.escape(str(row["name"]))
         href = "/admin/student?" + _query(cid, key, k=row["kaohao"]) if private else ""
+        if not private and row.get('source_id'):
+            from .public_sources import source_url
+            href = source_url(cid, row['source_id'])
         if href:
+            title = '查看提交 · ' + str(row['kaohao']) if private else '查看提交源码'
             name = (f'<a class="student-name" href="{html.escape(href, quote=True)}" '
-                    f'title="查看提交 · {html.escape(row["kaohao"], quote=True)}">{name}{icon("arrow")}</a>')
+                         f'title="{html.escape(title, quote=True)}">{name}{icon("arrow")}</a>')
         else:
             name = f'<span class="student-name">{name}</span>'
         rank = row["rank"] if row["rank"] is not None else "—"
@@ -141,7 +148,8 @@ def _rows(cid: str, state: dict, private: bool, key: str) -> str:
             text = "—" if blank else str(score)
             hint = f'{problem["name"]} · {score} / {problem["full"]}' if not blank else "待评测" if row["pending"] else "未提交"
             if href and row["submitted"]:
-                cell = (f'<a class="score {cls}" href="{html.escape(href, quote=True)}#T{problem["no"]}" '
+                target = href + f'#T{problem["no"]}' if private else source_url(cid, row['source_id'], problem['no'])
+                cell = (f'<a class="score {cls}" href="{html.escape(target, quote=True)}" '
                         f'title="查看提交 · {html.escape(hint, quote=True)}" '
                         f'aria-label="{html.escape(str(row["name"]) + " · " + problem["name"] + " · 查看提交", quote=True)}">{text}</a>')
             else:
@@ -210,6 +218,7 @@ const campus=document.getElementById('campus-filter'),teacher=document.getElemen
 const arrow='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 12 12 4M5 4h7v7"/></svg>';
 function node(tag,text,cls){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n}
 function studentHref(r){const q=new URLSearchParams({c:cfg.cid,k:r.kaohao});if(cfg.key)q.set('key',cfg.key);return '/admin/student?'+q}
+function sourceHref(r,no){const q=new URLSearchParams({c:cfg.cid,source:r.source_id});if(no!==undefined)q.set('p',no);return '/scoreboard?'+q}
 function fillOptions(select,values,label){
  const selected=select.value,fragment=document.createDocumentFragment(),all=node('option',label);all.value='';fragment.append(all);
  values.forEach(v=>{const option=node('option',v||'未填写');option.value=v?'='+v:'~';fragment.append(option)});
@@ -225,17 +234,20 @@ function drawRows(){
   const tr=document.createElement('tr'),rank=r.rank===null?'—':r.rank;
   tr.append(node('td',rank,'rank-col rank'+(r.rank!==null&&r.rank<=3?' leader':'')));
   tr.append(node('td',r.filtered_rank==null?'—':r.filtered_rank,'rank-col rank'));
-  const name=node('td','','name-col'),who=node(cfg.private?'a':'span',r.name,'student-name');
+  const shared=!!r.source_id&&!cfg.private;
+  const name=node('td','','name-col'),who=node(cfg.private||shared?'a':'span',r.name,'student-name');
   if(cfg.private){who.href=studentHref(r);who.title='查看提交 · '+r.kaohao;who.insertAdjacentHTML('beforeend',arrow)}
+  else if(shared){who.href=sourceHref(r);who.title='查看提交源码';who.insertAdjacentHTML('beforeend',arrow)}
   name.append(who);tr.append(name);
   tr.append(node('td',r.campus||'未填写','affiliation-col'));tr.append(node('td',r.teacher||'未填写','affiliation-col'));
   const label=({queued:'排队中',judging:'评测中',error:'待重测',stale:'待重测',blocked:'待补资料'})[r.state]||'待评测';
   tr.append(node('td',r.pending?label:r.submitted?r.total:'—','total-col total'+(r.pending||!r.submitted?' waiting':'')));
   r.scores.forEach((v,i)=>{
    const p=state.problems[i],blank=r.pending||!r.submitted,cls=blank?'blank':v>=p.full?'full':v>0?'part':'zero';
-   const td=node('td','','problem-col'),score=node(cfg.private&&r.submitted?'a':'span',blank?'—':v,'score '+cls);
+   const td=node('td','','problem-col'),score=node((cfg.private||shared)&&r.submitted?'a':'span',blank?'—':v,'score '+cls);
    score.title=blank?(r.pending?'待评测':'未提交'):p.name+' · '+v+' / '+p.full;
    if(cfg.private&&r.submitted){score.href=studentHref(r)+'#T'+p.no;score.title='查看提交 · '+score.title;score.setAttribute('aria-label',r.name+' · '+p.name+' · 查看提交')}
+   else if(shared&&r.submitted){score.href=sourceHref(r,p.no);score.title='查看源码 · '+score.title;score.setAttribute('aria-label',r.name+' · '+p.name+' · 查看源码')}
    td.append(score);tr.append(td);
   });fragment.append(tr);
  });
