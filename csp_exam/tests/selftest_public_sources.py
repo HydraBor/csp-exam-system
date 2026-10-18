@@ -181,5 +181,70 @@ class PublicSources(unittest.TestCase):
         self.assertEqual(attempts.all_for(self.cid),{})
         self.assertEqual(self.get(self.url)[0],403)
 
+    def test_admin_reenable_invalidates_cached_board_and_changes_only_switch(self):
+        # Exercise both button values through the actual HTTP form handler.
+        # A cached board must gain/lose the entry without any unrelated write.
+        before_exam=store.load_exam(self.cid)
+        before_roster=store.load_roster(self.cid)
+        before_results=store.load_results(self.cid)
+        for value in ('0','1','0','1'):
+            status,_,_=self.get('/admin/release?c='+self.cid,
+                form={'public_sources':value},admin=True)
+            self.assertEqual(status,302)
+            self.assertEqual(store.get_contest(self.cid),
+                dict(self.contest,public_sources=value=='1'))
+            status,_,body=self.get('/api/scoreboard?c='+self.cid)
+            self.assertEqual(status,200)
+            self.assertEqual('source_id' in json.loads(body)['rows'][0],value=='1')
+            self.assertEqual(self.get(self.url+'&p=1&download=1')[0],200 if value=='1' else 403)
+        self.assertEqual(store.load_exam(self.cid),before_exam)
+        self.assertEqual(store.load_roster(self.cid),before_roster)
+        self.assertEqual(store.load_results(self.cid),before_results)
+
+    def test_empty_and_gbk_sources_download_original_bytes(self):
+        path=Path(store.upload_dir(self.cid,self.kh))/self.rel
+        for data in (b'', '// 中文注释\nint main(){}\n'.encode('gbk')):
+            path.write_bytes(data)
+            status,headers,body=self.get(self.url+'&p=1&download=1')
+            self.assertEqual(status,200)
+            self.assertEqual(body,data)
+            self.assertEqual(int(headers['Content-Length']),len(data))
+            status,_,preview=self.get(self.url+'&p=1')
+            self.assertEqual(status,200)
+            if data:
+                self.assertIn('中文注释'.encode(),preview)
+
+    def test_binary_and_oversized_sources_fail_closed(self):
+        path=Path(store.upload_dir(self.cid,self.kh))/self.rel
+        for data in (b'int main(){}\x00PRIVATE BINARY',
+                     b'x'*(public_sources.MAX_PUBLIC_BYTES+1)):
+            path.write_bytes(data)
+            self.assertEqual(self.get(self.url+'&p=1&download=1')[0],404)
+            status,_,body=self.get(self.url+'&p=1')
+            self.assertEqual(status,200)
+            self.assertIn('这道题没有可公开的源码。'.encode(),body)
+
+    def test_result_replacement_refreshes_code_score_and_case_details_together(self):
+        # An OI rejudge or a newly retained IOI result may replace the result.
+        self.get('/api/scoreboard?c='+self.cid)
+        rel='__submissions/'+'b'*32+'/'+self.kh+'/sum/sum.cpp'
+        data=b'// replacement judged code\nint main(){}\n'
+        path=Path(store.upload_dir(self.cid,self.kh))/rel
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+        result=store.load_results(self.cid)[self.kh]
+        result['problems']['T1'].update(score=0,file=rel,testcases=[
+            {'status':2,'score':0,'time':9,'memory':4096}])
+        store.put_result(self.cid,self.kh,result)
+        status,_,body=self.get('/api/scoreboard?c='+self.cid)
+        row=json.loads(body)['rows'][0]
+        self.assertEqual(status,200);self.assertEqual(row['scores'][0],0)
+        self.assertEqual(row['source_id'],self.token)
+        status,_,body=self.get(self.url+'&p=1')
+        self.assertEqual(status,200)
+        for value in ('0 / 100','答案错误','replacement judged code','0 / 1'):
+            self.assertIn(value.encode(),body)
+        self.assertNotIn(b'alert(1)',body)
+        self.assertEqual(self.get(self.url+'&p=1&download=1')[2],data)
+
 
 if __name__ == '__main__': unittest.main()
