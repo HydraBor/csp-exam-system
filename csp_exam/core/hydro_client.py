@@ -33,6 +33,11 @@ def judge(pid, source, ext, cases, per, *, code, time_ms, memory_mb, io_mode):
     if not token:
         raise gojudge.GoJudgeError('HydroJudge 尚未配置；不会回退到自编判题器')
     raw = source.encode('utf8') if isinstance(source,str) else source
+    # The bridge requires a nonempty transport payload. A newline is the same
+    # empty C/C++ translation unit; Hydro's compiler still determines CE. Keep
+    # the original zero-byte archive unchanged instead of retrying HTTP 500.
+    if not raw:
+        raw = b'\n'
     # Test data keeps the platform's original byte contents; only file metadata crosses HTTP.
     case_files = []
     for c, score in zip(cases, per):

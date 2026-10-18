@@ -185,6 +185,19 @@ class Regression(unittest.TestCase):
         self.assertEqual(r["effective_time_ms"], 1500)
         self.assertEqual(r["reference_time"], 600)
 
+    def test_empty_source_transport_uses_compiler_instead_of_retrying_system_error(self):
+        import base64, io, json, os
+        for original, transported in ((b'',b'\n'),(b'int main(){}',b'int main(){}')):
+            def response(request,timeout):
+                body=json.loads(request.data)
+                self.assertEqual(base64.b64decode(body['source_b64']),transported)
+                return io.BytesIO(json.dumps({'status':7,'score':0,'cases':[],
+                    'engine':{'name':'HydroJudge'}}).encode())
+            with patch.dict(os.environ,{'CSP_HYDRO_TOKEN':'test-only-token'}), \
+                    patch.object(hydro_client.urllib.request,'urlopen',side_effect=response):
+                row=hydro_client.judge('P',original,'.cpp',[],[],code='candy',time_ms=1000,memory_mb=256,io_mode='file')
+            self.assertEqual(row['status'],7)
+
     def test_judging_delegates_without_fallback(self):
         judgelocal.store_problem('P', [{'in': b'1', 'out': b'2', 'name': '1'}])
         raw = b'// GBK: \xff\xfe\nint main(){}'
