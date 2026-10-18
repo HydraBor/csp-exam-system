@@ -33,7 +33,7 @@ def submission(cid, token):
         raise FileNotFoundError('提交不存在。')
     for kh, student in store.load_roster(cid).items():
         if hmac.compare_digest(student_token(cid, kh), token):
-            result = store.load_results(cid).get(kh)
+            result = store.get_result(cid, kh)
             if not result or store.result_pending(result):
                 raise FileNotFoundError('没有可公开的提交。')
             return contest, exam, kh, student, result

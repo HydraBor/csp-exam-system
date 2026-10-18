@@ -84,5 +84,49 @@ class Storage(unittest.TestCase):
         self.assertIsNone(database.key_for(self.root,self.root/"../secret.json"))
         self.assertEqual(database.key_for(self.root,self.root/"samples/P/manifest.json"),"samples/P/manifest.json")
 
+    def test_single_result_read_does_not_decode_the_whole_contest(self):
+        with patch.object(store,'DATA_DIR',str(self.root)):
+            store.save_results('c1',{'K':{'score':3},'OTHER':{'source':'PRIVATE OTHER STUDENT'}})
+            # A single student's request must never fall back to the bulk loader.
+            with patch.object(database,'_get',side_effect=AssertionError('bulk result read')):
+                self.assertEqual(store.get_result('c1','K'),{'score':3})
+                self.assertIsNone(store.get_result('c1','MISSING'))
+                self.assertEqual(store.get_result('c1','MISSING',{}),{})
+                self.assertEqual(store.get_result('c1','K\' OR 1=1 --',{}),{})
+
+    def test_single_result_update_preserves_other_rows_position_and_invalidates(self):
+        key='contests/c1/results.json'
+        with patch.object(store,'DATA_DIR',str(self.root)):
+            store.put_result('c1','K',{'score':1})
+            store.put_result('c1','OTHER',{'score':8})
+            before=database.signature(self.root,[key])
+            with database.connection(self.root) as db:
+                other=db.execute('SELECT position,payload FROM records WHERE document_key=? AND item_key=?',(key,'OTHER')).fetchone()
+            with patch.object(database,'_get',side_effect=AssertionError('bulk result write')):
+                store.put_result('c1','K',{'score':100})
+            self.assertNotEqual(database.signature(self.root,[key]),before)
+            self.assertEqual(store.load_results('c1'),{'K':{'score':100},'OTHER':{'score':8}})
+            with database.connection(self.root) as db:
+                self.assertEqual(db.execute('SELECT position,payload FROM records WHERE document_key=? AND item_key=?',(key,'OTHER')).fetchone(),other)
+
+    def test_single_update_rollback_and_wrapped_header(self):
+        key='contests/c1/results.json'
+        database.save(self.root,key,{'items':{'K':{'score':1}},'note':'keep header'})
+        with self.assertRaises(RuntimeError):
+            with database.transaction(self.root):
+                database.put_item(self.root,key,'K',{'score':99})
+                database.put_item(self.root,key,'NEW',{'score':3})
+                raise RuntimeError('abort')
+        self.assertEqual(database.load(self.root,key,None),{'items':{'K':{'score':1}},'note':'keep header'})
+        database.put_item(self.root,key,'NEW',{'score':3})
+        self.assertEqual(database.load(self.root,key,None),{'items':{'K':{'score':1},'NEW':{'score':3}},'note':'keep header'})
+
+    def test_concurrent_single_writes_do_not_drop_siblings(self):
+        with patch.object(store,'DATA_DIR',str(self.root)):
+            def write(index):store.put_result('c1',str(index),{'score':index})
+            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+                list(pool.map(write,range(50)))
+            self.assertEqual(store.load_results('c1'),{str(i):{'score':i} for i in range(50)})
+
 
 if __name__ == '__main__':unittest.main()

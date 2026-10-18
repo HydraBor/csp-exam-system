@@ -18,7 +18,6 @@ import time
 import urllib.parse
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from socketserver import ThreadingMixIn
 
 from ..core import store, contest_time
 from ..config import JUDGE_SLOTS, MAX_UPLOAD
@@ -33,6 +32,45 @@ from .student_pages import StudentPages
 from .admin_pages import AdminPages
 
 _UPLOAD_SLOTS = threading.BoundedSemaphore(2)
+
+
+class LimitedThreadingHTTPServer(ThreadingHTTPServer):
+    """Bound request memory; reject excess connections instead of spawning forever."""
+    request_queue_size = 128
+    daemon_threads = True
+
+    def __init__(self, address, handler, *, max_workers=16):
+        if max_workers < 1:
+            raise ValueError('HTTP worker limit must be positive')
+        self._request_slots = threading.BoundedSemaphore(max_workers)
+        super().__init__(address, handler)
+
+    def process_request(self, request, address):
+        if not self._request_slots.acquire(blocking=False):
+            body = '服务繁忙，请稍后重试。'.encode('utf-8')
+            response = ('HTTP/1.1 503 Service Unavailable\r\n'
+                        'Content-Type: text/plain; charset=utf-8\r\n'
+                        f'Content-Length: {len(body)}\r\nRetry-After: 2\r\n'
+                        'Cache-Control: no-store\r\nConnection: close\r\n\r\n').encode() + body
+            try:
+                request.settimeout(1)
+                request.sendall(response)
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self._request_slots.release()
 
 
 class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
@@ -266,6 +304,8 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._route_get()
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
         except ValueError as e:
             self._send(page("请求无效", self._flash("err", str(e))), 400)
         except Exception:
@@ -287,6 +327,8 @@ class Handler(StudentPages, AdminPages, BaseHTTPRequestHandler):
                     self._route_post()
             else:
                 self._route_post()
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
         except ValueError as e:
             self._send(page("请求无效", self._flash("err", str(e))), 400)
         except Exception:
@@ -619,7 +661,7 @@ def _serve_main():
     log(f"比赛服务启动，端口 {PORT}，共 {len(contests)} 场比赛："
         + "、".join(f"{c['title']}({c['rule']})" for c in contests) if contests
         else f"比赛服务启动，端口 {PORT}（还没有比赛，先去管理端新建）")
-    server = ThreadingHTTPServer((BIND, PORT), Handler)
+    server = LimitedThreadingHTTPServer((BIND, PORT), Handler)
     server.daemon_threads = True
     try:
         server.serve_forever()

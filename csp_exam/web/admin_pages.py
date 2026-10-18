@@ -2260,7 +2260,7 @@ document.getElementById('affiliation-teacher').value=o.dataset.teacher||'';}});
             return
         exam = store.load_exam(cid)
         rule = store.rule_of(contest)
-        entry = (store.load_results(cid) or {}).get(kaohao)
+        entry = store.get_result(cid, kaohao)
         info = store.load_roster(cid).get(kaohao) or {}
         # 名次表**只取一次**：名次和下面的「快速换人」下拉都用它
         # （`include_all=True` = 连没交的学生一起列，顺序与「成绩总表」完全一致；
@@ -3101,7 +3101,7 @@ window.addEventListener('hashchange',openLinkedSource);
         want = str(q.get("t", "") or "").strip()
         exam = store.load_exam(cid)
         prob = next((p for p in exam.get("problems", []) if str(p.get("no")) == pno), None)
-        entry = (store.load_results(cid) or {}).get(kaohao) or {}
+        entry = store.get_result(cid, kaohao) or {}
         if not prob or not entry:
             self._json({"ok": False, "error": "找不到这一题或这位学生的成绩"}, 404)
             return

@@ -162,6 +162,31 @@ def load(root, key, default):
         return _get(db, key, default)
 
 
+def item(root, key, item_key, default=None):
+    """Read one keyed record without decoding every student's testcase content."""
+    with connection(root) as db:
+        row = db.execute('SELECT payload FROM records WHERE document_key=? AND item_key=?',
+                         (key, str(item_key))).fetchone()
+        return json.loads(row[0]) if row else default() if callable(default) else default
+
+
+def put_item(root, key, item_key, payload):
+    """Update one dictionary entry and invalidate document-version caches atomically."""
+    with connection(root) as db:
+        document = db.execute('SELECT shape FROM documents WHERE key=?', (key,)).fetchone()
+        if document is None:
+            _put(db, key, {str(item_key): payload})
+            return
+        if document[0] not in ('dict', 'wrapped-dict'):
+            raise ValueError('单条更新只适用于字典集合。')
+        db.execute('INSERT INTO records(document_key,item_key,position,payload) '
+                   'VALUES(?,?,coalesce((SELECT max(position)+1 FROM records WHERE document_key=?),0),?) '
+                   'ON CONFLICT(document_key,item_key) DO UPDATE SET payload=excluded.payload',
+                   (key, str(item_key), key, _encode(payload)))
+        db.execute('UPDATE documents SET updated_at=?,revision=revision+1 WHERE key=?',
+                   (time.time(), key))
+
+
 def save(root, key, data):
     with connection(root) as db:
         _put(db, key, data)

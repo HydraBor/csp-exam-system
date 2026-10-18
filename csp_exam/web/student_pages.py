@@ -260,7 +260,7 @@ class StudentPages:
                 continue
             entry = store.load_roster(c["id"]).get(kaohao)
             if entry:
-                contests.append((c, entry, store.load_results(c["id"]).get(kaohao, {})))
+                contests.append((c, entry, store.get_result(c["id"], kaohao, {})))
         nav = (f'<p class="muted">当前考号：<b>{html.escape(kaohao)}</b>'
                f' · <a href="/help">考生须知</a>'
                f' · <a class="btn btn-sm btn-outline-secondary" href="/logout">退出登录</a></p>')
@@ -330,7 +330,7 @@ class StudentPages:
         if contest_time.student_phase(contest, kaohao) != "running":
             return self._contest_status(contest, cid)
         exam = store.load_exam(cid)
-        result = store.load_results(cid).get(kaohao)
+        result = store.get_result(cid, kaohao)
         name = store.student_name(cid, kaohao)
         nav = self._nav(kaohao, cid, name=name, contests=True, back=False)
         body = [nav,
@@ -750,7 +750,7 @@ class StudentPages:
                 sid, snapshot = submissions.archive(cid, kaohao, files)
                 snapshot_dir = submissions.confined_file(store.upload_dir(cid, kaohao), snapshot)
                 snapshot_picked = {k: f"{snapshot}/{v}" for k, v in picked.items()}
-                result = store.load_results(cid).get(kaohao, {})
+                result = store.get_result(cid, kaohao, {})
                 # IOI 的未知历史最高分不能由一次新交卷消除；补交后仍需重测核验。
                 if not store.rule_of(contest).get("best_of"):
                     result.pop("rejudge_error", None)
@@ -814,7 +814,7 @@ class StudentPages:
             self.wfile.write(data)
             return
 
-        result = store.load_results(cid).get(kaohao) or {}
+        result = store.get_result(cid, kaohao) or {}
         picked = result.get("picked") or result.get("structure_picked") or {}
         exam = store.load_exam(cid)
         used_by = ""
@@ -887,7 +887,7 @@ class StudentPages:
         want = kaohao_input.strip().upper() or (self._student(cid) or "")
         if want:
             k = want
-            res = store.load_results(cid).get(k)
+            res = store.get_result(cid, k)
             if k not in store.load_roster(cid) or not res:
                 out.append(self._flash("err", f"没有找到考号 {k} 的提交记录。"))
             else:

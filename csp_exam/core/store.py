@@ -870,6 +870,11 @@ def load_results(cid: str) -> dict:
     return _load(_cp(cid, "results.json"), dict)
 
 
+def get_result(cid: str, kaohao: str, default=None):
+    key = database.key_for(DATA_DIR, _cp(cid, 'results.json'))
+    return database.item(DATA_DIR, key, kaohao, default)
+
+
 def save_results(cid: str, results: dict) -> None:
     with _LOCK:
         _save(_cp(cid, "results.json"), results)
@@ -877,9 +882,8 @@ def save_results(cid: str, results: dict) -> None:
 
 def put_result(cid: str, kaohao: str, payload: dict) -> None:
     with _LOCK:
-        results = load_results(cid)
-        results[kaohao] = payload
-        save_results(cid, results)
+        key = database.key_for(DATA_DIR, _cp(cid, 'results.json'))
+        database.put_item(DATA_DIR, key, kaohao, payload)
 
 
 def upload_dir(cid: str, kaohao: str) -> str:

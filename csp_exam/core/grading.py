@@ -80,7 +80,7 @@ def _work_queue():
             if retry:
                 cid, kh, _, _, sid = payload
                 with store._LOCK:
-                    current = store.load_results(cid).get(kh, {})
+                    current = store.get_result(cid, kh, {})
                     if current.get('submission_id') == sid:
                         current.update(submission_state='queued', judging=True)
                         store.put_result(cid, kh, current)
@@ -474,7 +474,7 @@ def _clear_judging(cid: str, kaohao: str, submission_id: str = "", *, error: boo
         if not store.get_contest(cid):
             return
         with store._LOCK:
-            entry = store.load_results(cid).get(kaohao, {})
+            entry = store.get_result(cid, kaohao, {})
             if submission_id and entry.get("submission_id") != submission_id:
                 return
             entry.setdefault("problems", {})
@@ -526,7 +526,7 @@ def _apply_result(cid: str, kaohao: str, prob_no: int, row: dict, *, best_of: bo
             return {"status_text": "比赛已删除", "score": 0, "tries": 0, "improved": False,
                     "attempt_status_text": "比赛已删除", "attempt_score": 0}
         key = store.problem_dir_name(prob_no)
-        entry = store.load_results(cid).get(kaohao, {})
+        entry = store.get_result(cid, kaohao, {})
         if submission_id and entry.get("submission_id") != submission_id:
             return {"score": 0, "status_text": "旧提交已作废", "stale": True}
         entry.setdefault("problems", {})
@@ -625,7 +625,7 @@ def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: st
         log(f"[{cid}/{kaohao}] 不在本场名单里，跳过判分")
         return
     # 本场的赛制规则：决定「I/O 口径」和「怎么计分」
-    current_entry = store.load_results(cid).get(kaohao, {})
+    current_entry = store.get_result(cid, kaohao, {})
     rule = (current_entry.get("judge_rule") if submission_id and current_entry.get("submission_id") == submission_id else None) or store.rule_of(store.get_contest(cid) or {})
     io_mode = "file" if rule.get("freopen") else "stdin"
     best_of = bool(rule.get("best_of"))
@@ -635,7 +635,7 @@ def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: st
         log(f"[判分] 比赛 {cid} 已删除，跳过 {kaohao}")
         return
     with store._LOCK:
-        entry = store.load_results(cid).get(kaohao, {})
+        entry = store.get_result(cid, kaohao, {})
         if submission_id and entry.get("submission_id") != submission_id:
             return False
         from . import judge_profile
@@ -674,7 +674,7 @@ def judge_csp(cid: str, kaohao: str, picked: dict, exam: dict, submission_id: st
                                                "judgeTexts": ["本次交卷未提交这道题的源码"]},
                               best_of=False, full=full, code=code, submission_id=submission_id)
             continue
-        if submission_id and store.load_results(cid).get(kaohao, {}).get("submission_id") != submission_id:
+        if submission_id and store.get_result(cid, kaohao, {}).get("submission_id") != submission_id:
             return False
         try:
             src = submissions.confined_file(base_dir, rel)
